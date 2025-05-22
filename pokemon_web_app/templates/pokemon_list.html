@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trainer {{ trainer_id }}'s Pokemon</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        h1 { color: #007bff; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background-color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 12px 15px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #007bff; color: #ffffff; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        tr:hover { background-color: #f1f1f1; }
+        .no-pokemon { color: #777; font-style: italic; }
+        .button {
+            background-color: #28a745;
+            color: white;
+            padding: 8px 12px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+        }
+        .button:hover { background-color: #218838; }
+        ul { padding-left: 20px; margin: 0; }
+        li { list-style-type: disc; }
+    </style>
+</head>
+<body>
+    <h1>Pokemon for Trainer ID: {{ trainer_id }}</h1>
+
+    {% if pokemon_list %}
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Species</th>
+                    <th>Nickname</th>
+                    <th>Level</th>
+                    <th>Held Item</th>
+                    <th>Moves</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pkm in pokemon_list %}
+                <tr>
+                    <td>{{ pkm.pokemon_id }}</td>
+                    <td>{{ pkm.species }}</td>
+                    <td>{{ pkm.nickname if pkm.nickname else 'N/A' }}</td>
+                    <td>{{ pkm.level if pkm.level else 'N/A' }}</td>
+                    <td>{{ pkm.held_item if pkm.held_item else 'None' }}</td>
+                    <td>
+                        {% if pkm.moves %}
+                            <ul>
+                            {% for move in pkm.moves %}
+                                <li>{{ move }}</li>
+                            {% endfor %}
+                            </ul>
+                        {% else %}
+                            None
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('initiate_trade', trainer_id=trainer_id, pokemon_id=pkm.pokemon_id) }}" class="button">
+                            Select for Trade
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="no-pokemon">This trainer has no Pokemon.</p>
+    {% endif %}
+
+    <p><a href="/">Back to home (not implemented)</a></p>
+</body>
+</html>

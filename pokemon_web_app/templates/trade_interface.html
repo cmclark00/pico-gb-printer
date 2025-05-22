@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade Interface - ID: {{ trade_id }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        h1, h2 { color: #007bff; }
+        .container { display: flex; justify-content: space-around; margin-bottom: 20px; }
+        .offer-box { width: 45%; padding: 15px; background-color: #fff; border: 1px solid #ddd; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .pokemon-details { margin-bottom: 10px; }
+        .pokemon-details strong { color: #555; }
+        .pokemon-list table { width: 100%; border-collapse: collapse; }
+        .pokemon-list th, .pokemon-list td { padding: 8px; border: 1px solid #eee; text-align: left; }
+        .pokemon-list th { background-color: #e9ecef; }
+        .button {
+            background-color: #007bff; color: white; padding: 10px 15px; text-decoration: none;
+            border-radius: 4px; border: none; cursor: pointer; margin-right: 10px;
+        }
+        .button.confirm { background-color: #28a745; }
+        .button.cancel { background-color: #dc3545; }
+        .button:hover { opacity: 0.9; }
+        .status-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .status-pending { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        .status-cancelled { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .status-ready { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash-messages { list-style-type: none; padding: 0; margin-bottom: 15px; }
+        .flash-messages li { padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+        .flash-messages .info { background-color: #cce5ff; color: #004085; border: 1px solid #b8daff; }
+        .flash-messages .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        ul { padding-left: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Trade Session: {{ trade_id }}</h1>
+    <p>You are Trainer ID: {{ current_trainer_id }}</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <ul class="flash-messages">
+            {% for category, message in messages %}
+                <li class="{{ category }}">{{ message }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+
+    {% if trade_session.status == 'cancelled' %}
+        <div class="status-message status-cancelled">
+            This trade has been cancelled.
+        </div>
+        <a href="{{ url_for('pokemon_list', trainer_id=current_trainer_id) }}" class="button">Back to Your Pokemon</a>
+        {% return %}
+    {% endif %}
+
+    <div class="container">
+        <div class="offer-box">
+            <h2>
+                {% if is_trainer_a %}Your Offer (Trainer A: {{ trade_session.trainer_a_id }}){% else %}Trainer A's Offer (ID: {{ trade_session.trainer_a_id }}){% endif %}
+            </h2>
+            {% if trade_session.pokemon_a_details %}
+                <div class="pokemon-details">
+                    <p><strong>Pokemon ID:</strong> {{ trade_session.pokemon_a_details.pokemon_id }}</p>
+                    <p><strong>Species:</strong> {{ trade_session.pokemon_a_details.species }}</p>
+                    <p><strong>Nickname:</strong> {{ trade_session.pokemon_a_details.nickname if trade_session.pokemon_a_details.nickname else 'N/A' }}</p>
+                    <p><strong>Level:</strong> {{ trade_session.pokemon_a_details.level }}</p>
+                    <p><strong>Held Item:</strong> {{ trade_session.pokemon_a_details.held_item if trade_session.pokemon_a_details.held_item else 'None' }}</p>
+                    <p><strong>Moves:</strong></p>
+                    {% if trade_session.pokemon_a_details.moves %}
+                        <ul>
+                        {% for move in trade_session.pokemon_a_details.moves %}
+                            <li>{{ move }}</li>
+                        {% endfor %}
+                        </ul>
+                    {% else %}
+                        None
+                    {% endif %}
+                </div>
+            {% else %}
+                <p>Trainer A has not offered a Pokemon yet.</p>
+            {% endif %}
+        </div>
+
+        <div class="offer-box">
+            <h2>
+                {% if is_trainer_b %}Your Offer (Trainer B: {{ trade_session.trainer_b_id }}){% elif trade_session.trainer_b_id %}Partner's Offer (Trainer B: {{ trade_session.trainer_b_id }}){% else %}Partner's Offer (Waiting for Trainer B){% endif %}
+            </h2>
+            {% if trade_session.pokemon_b_details %}
+                 <div class="pokemon-details">
+                    <p><strong>Pokemon ID:</strong> {{ trade_session.pokemon_b_details.pokemon_id }}</p>
+                    <p><strong>Species:</strong> {{ trade_session.pokemon_b_details.species }}</p>
+                    <p><strong>Nickname:</strong> {{ trade_session.pokemon_b_details.nickname if trade_session.pokemon_b_details.nickname else 'N/A' }}</p>
+                    <p><strong>Level:</strong> {{ trade_session.pokemon_b_details.level }}</p>
+                    <p><strong>Held Item:</strong> {{ trade_session.pokemon_b_details.held_item if trade_session.pokemon_b_details.held_item else 'None' }}</p>
+                    <p><strong>Moves:</strong></p>
+                     {% if trade_session.pokemon_b_details.moves %}
+                        <ul>
+                        {% for move in trade_session.pokemon_b_details.moves %}
+                            <li>{{ move }}</li>
+                        {% endfor %}
+                        </ul>
+                    {% else %}
+                        None
+                    {% endif %}
+                </div>
+            {% elif trade_session.trainer_b_id %}
+                <p>Trainer B ({{trade_session.trainer_b_id}}) has not offered a Pokemon yet.</p>
+            {% else %}
+                <p>Waiting for Trainer B to join and make an offer.</p>
+                <p>If you are Trainer B, ensure your Trainer ID ({{ current_trainer_id }}) is correct in the URL. Refreshing might assign you if you just joined.</p>
+                 <p>Share this trade link: <input type="text" value="{{ url_for('trade_interface', trade_id=trade_id, current_trainer_id=0, _external=True) }}" readonly size="50"></p>
+                 <p>(Replace 0 with the other trainer's ID, or tell them to visit with their ID)</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if trade_session.status == 'pending_b' and is_trainer_a %}
+        <div class="status-message status-pending">
+            Waiting for another trainer to join the trade and make an offer. Share the trade link.
+            <p>Trade Link: <input type="text" value="{{ url_for('trade_interface', trade_id=trade_id, current_trainer_id=0, _external=True) }}" readonly size="50"></p>
+            <p>(Tell the other trainer to replace 0 with their actual Trainer ID if they are joining)</p>
+        </div>
+    {% elif trade_session.status == 'pending_b_offer' and is_trainer_b and not trade_session.pokemon_b_id %}
+        <div class="pokemon-list offer-box">
+            <h2>Your Pokemon (Trainer {{ current_trainer_id }}) - Select one to offer</h2>
+            {% if trainer_pokemon_list %}
+                <table>
+                    <thead><tr><th>ID</th><th>Species</th><th>Nickname</th><th>Action</th></tr></thead>
+                    <tbody>
+                        {% for pkm in trainer_pokemon_list %}
+                            {% if pkm.pokemon_id != trade_session.pokemon_a_id or trade_session.trainer_a_id != current_trainer_id %} {# Prevent offering the exact same Pokemon instance #}
+                            <tr>
+                                <td>{{ pkm.pokemon_id }}</td>
+                                <td>{{ pkm.species }}</td>
+                                <td>{{ pkm.nickname if pkm.nickname else 'N/A' }}</td>
+                                <td>
+                                    <a href="{{ url_for('offer_pokemon', trade_id=trade_id, offering_trainer_id=current_trainer_id, pokemon_id=pkm.pokemon_id) }}" class="button">
+                                        Offer this Pokemon
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>You have no other Pokemon available to offer.</p>
+            {% endif %}
+        </div>
+    {% elif trade_session.status == 'pending_confirm' and trade_session.pokemon_a_id and trade_session.pokemon_b_id %}
+        <div class="status-message status-ready">
+            Both trainers have offered a Pokemon. Please confirm your choice.
+        </div>
+    {% elif trade_session.status == 'awaiting_other_confirmation' %}
+        <div class="status-message status-pending">
+            Waiting for the other trainer to confirm their offer.
+        </div>
+    {% elif trade_session.status == 'processing' %}
+        <div class="status-message status-pending">
+            Processing trade... Please wait.
+        </div>
+    {% elif trade_session.status == 'completed' %}
+        <div class="status-message status-ready">
+            Trade Completed Successfully!
+            {% if trade_session.pokemon_a_details_after_trade or trade_session.pokemon_b_details_after_trade %}
+                <p><strong>Post-Trade Status:</strong></p>
+                <ul>
+                    {% if trade_session.pokemon_a_details_after_trade %}
+                    <li>
+                        Original Pokemon from Trainer {{trade_session.trainer_a_id}} (ID: {{trade_session.pokemon_a_id}}):
+                        Now {{ trade_session.pokemon_a_details_after_trade.species }} with Trainer {{ trade_session.pokemon_a_details_after_trade.trainer_id }}.
+                        Held Item: {{ trade_session.pokemon_a_details_after_trade.held_item if trade_session.pokemon_a_details_after_trade.held_item else 'None' }}.
+                    </li>
+                    {% endif %}
+                    {% if trade_session.pokemon_b_details_after_trade %}
+                    <li>
+                        Original Pokemon from Trainer {{trade_session.trainer_b_id}} (ID: {{trade_session.pokemon_b_id}}):
+                        Now {{ trade_session.pokemon_b_details_after_trade.species }} with Trainer {{ trade_session.pokemon_b_details_after_trade.trainer_id }}.
+                        Held Item: {{ trade_session.pokemon_b_details_after_trade.held_item if trade_session.pokemon_b_details_after_trade.held_item else 'None' }}.
+                    </li>
+                    {% endif %}
+                </ul>
+            {% endif %}
+        </div>
+    {% elif trade_session.status == 'failed' %}
+        <div class="status-message status-cancelled">
+            Trade Failed. Please check any messages or try again.
+        </div>
+    {% endif %}
+
+    <div style="margin-top: 20px;" class="actions">
+        {% if trade_session.status in ['pending_confirm', 'awaiting_other_confirmation'] %}
+            {% if is_trainer_a %}
+                {% if not trade_session.trainer_a_confirmed %}
+                    <a href="{{ url_for('confirm_trade_offer', trade_id=trade_id, confirming_trainer_id=current_trainer_id) }}" class="button confirm">Confirm Your Offer (Trainer A)</a>
+                {% else %}
+                    <p><strong>You (Trainer A) have confirmed. Waiting for Trainer B.</strong></p>
+                {% endif %}
+            {% elif is_trainer_b %}
+                {% if not trade_session.trainer_b_confirmed %}
+                     <a href="{{ url_for('confirm_trade_offer', trade_id=trade_id, confirming_trainer_id=current_trainer_id) }}" class="button confirm">Confirm Your Offer (Trainer B)</a>
+                {% else %}
+                    <p><strong>You (Trainer B) have confirmed. Waiting for Trainer A.</strong></p>
+                {% endif %}
+            {% endif %}
+        {% endif %}
+        
+        {% if trade_session.status not in ['completed', 'failed', 'processing', 'cancelled'] %}
+            <a href="{{ url_for('cancel_trade', trade_id=trade_id, cancelling_trainer_id=current_trainer_id) }}" class="button cancel">Cancel Trade</a>
+        {% endif %}
+
+        <a href="{{ url_for('pokemon_list', trainer_id=current_trainer_id) }}" class="button">Back to Your Pokemon List</a>
+        {% if trade_session.status in ['completed', 'failed', 'cancelled'] %}
+             <a href="{{ url_for('pokemon_list', trainer_id=other_trainer_id if other_trainer_id else current_trainer_id) }}" class="button">View Partner's Pokemon List (if applicable)</a>
+        {% endif %}
+    </div>
+
+</body>
+</html>

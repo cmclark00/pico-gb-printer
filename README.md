@@ -1,87 +1,88 @@
-# Pico GameBoy printer
+# Pokemon Trading Simulator (Generations 1-3)
 
-<p align="center">
-   <img src="https://github.com/untoxa/pico-gb-printer/blob/main/screenshot.png?raw=true"/><img src="https://github.com/untoxa/pico-gb-printer/blob/main/usage.png?raw=true"/>
-</p>
+## Project Overview
+This project is a multi-generational Pokemon trading simulator that supports mechanics from Pokemon Generations 1, 2, and 3. It includes logic for trade evolutions, item-based evolutions, and the Everstone item. The simulation is accessed and controlled via a web-based user interface. Pokemon data and trainer information are stored in an SQLite database.
 
-Based on the original webserver for the PI Pico repo: https://github.com/maxnet/pico-webserver
+## Features
+-   **Multi-Generational Trading:** Supports trade evolution rules from Gen 1, Gen 2, and Gen 3.
+-   **Evolution Logic:**
+    -   Standard trade evolutions (e.g., Kadabra to Alakazam).
+    -   Item-dependent trade evolutions (e.g., Onix + Metal Coat to Steelix, Scyther + Metal Coat to Scizor).
+    -   Specific item evolutions for Gen 2 (King's Rock, Up-Grade, Dragon Scale).
+    -   Specific item evolutions for Gen 3 (Clamperl with DeepSeaTooth or DeepSeaScale).
+-   **Item Handling:**
+    -   Consumes items like Metal Coat, King's Rock, DeepSeaTooth, etc., upon successful evolution.
+    -   Everstone functionality to prevent evolution.
+-   **Web User Interface:** Built with Flask, allowing users to:
+    -   View a trainer's list of Pokemon.
+    -   Initiate a trade by selecting a Pokemon.
+    -   Join an existing trade using a shared link/trade ID.
+    -   Offer Pokemon for trade.
+    -   Confirm and execute trades.
+    -   View trade outcomes, including evolutions.
+-   **SQLite Database Storage:** Stores Pokemon details (species, nickname, level, held item, trainer ID, etc.).
+-   **Friendship Reset:** Simulates Gen 2+ behavior where traded Pokemon have their friendship reset to a base value (70).
 
-Webserver example that came with TinyUSB slightly modified to run on a Raspberry Pi Pico.
-Lets the Pico pretend to be a USB Ethernet device. Runs the webinterface at http://192.168.7.1/
-
-Special thanks to Raphael-Boichot, please check this repo: https://github.com/Raphael-Boichot/The-Arduino-SD-Game-Boy-Printer
-
-## Schematics
-
-You will need a Raspberry Pi, 1/2 of the game boy link cable and a four-channel 5v to 3.3v level shifter. Connect parts as shown:
-
-<p align="center">
-  <img src="https://github.com/untoxa/pico-gb-printer/blob/main/schematics.png?raw=true"/>
-</p>
-
-This is the example of the ready-to-use device:
-
-<p align="center">
-  <img src="https://github.com/untoxa/pico-gb-printer/blob/main/device.jpg?raw=true"/>
-</p>
-
-As finding which is SIN and SOUT is sometimes tricky as signals are crossed within the serial cable, you can also make your own PCB with a Pi Zero and a GBC/GBA serial socket [following the guide here](https://github.com/Raphael-Boichot/Collection-of-PCB-for-Game-Boy-Printer-Emulators). Just [route the LED to GPIO 8](https://github.com/Raphael-Boichot/pico-gb-printer/blob/c10a31e7458818ecd8ce3af9a09c53344a659cd4/include/globals.h#L8C33-L8C35) and the [Pushbutton to GPIO9](https://github.com/Raphael-Boichot/pico-gb-printer/blob/c10a31e7458818ecd8ce3af9a09c53344a659cd4/include/globals.h#L21) to make it shine and cut paper !
-
-<p align="center">
-  <img src="https://github.com/Raphael-Boichot/pico-gb-printer/blob/main/PCB.png?raw=true"/>
-  <img src="https://github.com/Raphael-Boichot/pico-gb-printer/blob/main/Pi_Zero_shield.jpg?raw=true"/>
-</p>
-
-## Build dependencies
-
-### On Debian:
-
+## Directory Structure
 ```
-sudo apt install git build-essential cmake gcc-arm-none-eabi
+pokemon_project_root/
+|-- pokemon_trade.db        # SQLite database
+|-- pokemon_trading.py      # Core trading logic, DB setup, evolution rules
+|-- pokemon_web_app/
+|   |-- app.py              # Flask application, UI routes, web backend
+|   |-- templates/          # HTML templates for the web UI
+|   |   |-- pokemon_list.html
+|   |   |-- trade_interface.html
+|   |-- static/             # (Optional, if you added any CSS/JS files)
+|-- README.md               # This file
 ```
 
-Your Linux distribution does need to provide a recent CMake (3.13+).
-If not, compile [CMake from source](https://cmake.org/download/#latest) first.
+## Setup and Installation
 
-### On OSX:
+**Prerequisites:**
+-   Python 3.x
+-   Flask
 
+**Installation:**
 ```bash
-brew install cmake doxygen 
-brew tap ArmMbed/homebrew-formulae
-brew install arm-none-eabi-gcc
+pip install Flask
 ```
 
-- Install the [Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) and make sure to add the location to your path. 
-### On Windows:
+**Database Initialization:**
+The database `pokemon_trade.db` is created and populated with initial sample data if it doesn't exist when `pokemon_web_app/app.py` is first run. The `setup_database` function from `pokemon_trading.py` is called, which is designed to be safe to run multiple times.
+*(Self-correction: The original `pokemon_trading.py`'s `if __name__ == '__main__':` block is what populates the diverse sample data. `app.py`'s call to `setup_database` only ensures the schema. The README should be clear on this.)*
 
-Windows is not a friendly system to compile the pico sdk. Unless you want to loose your precious time, use the following method:
-- Install [WSL (Windows Subsystem for Linux)](https://learn.microsoft.com/en-us/windows/wsl/install) (Ubuntu is default install) and update it
+To ensure the database is created with the schema AND populated with diverse sample data (Ash, Misty, various Pokemon for testing evolution, etc.), you **must** run `pokemon_trading.py` directly from the project root directory at least once:
+```bash
+python pokemon_trading.py
 ```
-sudo apt update && sudo apt full-upgrade
-```
-- Install the pico SDK by following the ["Quick Pico Setup"](https://datasheets.raspberrypi.com/pico/getting-started-with-pico.pdf)
-You can use the installation script written for Raspberry Pi, it works. Your computer may require a boot at this step.
-- Continue installation like below.
+Subsequently, running `pokemon_web_app/app.py` will use this populated database. If `pokemon_trade.db` is missing when `app.py` runs, it will create the schema but the database will be empty of Pokemon data.
 
-## Build instructions
+## Running the Application
+1.  Ensure the database `pokemon_trade.db` has been created and populated by running `python pokemon_trading.py` as described above.
+2.  Navigate to the `pokemon_web_app` directory (if you are in the project root):
+    ```bash
+    cd pokemon_web_app
+    ```
+3.  Run the Flask application:
+    ```bash
+    python app.py
+    ```
+    (Alternatively, from the project root: `python pokemon_web_app/app.py`)
 
-```
-git clone --depth 1 https://github.com/untoxa/pico-gb-printer
-cd pico-gb-printer
-git submodule update --init
-mkdir -p build
-cd build
-cmake ..
-make
-```
+4.  **Access:** Open your browser and go to `http://127.0.0.1:5000/trainer/101/pokemon_list` (for Ash), `http://127.0.0.1:5000/trainer/102/pokemon_list` (for Misty), or `http://127.0.0.1:5000/trainer/103/pokemon_list` (for May) to view their Pokemon. Other trainer IDs might exist if you added more in `setup_database`.
 
-Copy the resulting pico_gb_printer.uf2 file to the Pi Pico mass storage device manually.
-Webserver will be available at http://192.168.7.1/
+## How to Use (Trading Flow)
+1.  Trainer A navigates to their Pokemon list and clicks "Select for Trade" on a Pokemon.
+2.  Trainer A is taken to the trade interface page. A flash message will appear with trade initiation confirmation. The trade interface page itself will show a shareable link like: `http://127.0.0.1:5000/trade/<trade_id>/trainer/PUT_PARTNERS_TRAINER_ID_HERE`.
+3.  Trainer A copies this link and sends it to Trainer B. Trainer B replaces `PUT_PARTNERS_TRAINER_ID_HERE` with their own trainer ID (e.g., 102) and navigates to the URL.
+4.  Trainer B sees Trainer A's offer and can select one of their own Pokemon to offer.
+5.  Once both trainers have offered Pokemon, they will see "Confirm Trade" buttons.
+6.  Both trainers must click "Confirm Trade".
+7.  The trade is processed, and the page updates with the results (success, failure, evolutions).
 
-## Developing the Frontend
-Frontend code development requires node.js (>=20)  
-* Navigate to the `frontend` folder.
-* run `npm install` to install all dependencies
-* run `npm run dev` to start a local dev server on [127.0.0.1:3000](http://127.0.0.1:3000/). The server also does proxy the `/status.json` and `/download` endpoints from a Pico which must be connected to the same machine.
-* run `npm run build` to build the static files (html/css/js). Files will be built to `./fs` 
-* When building the rom file locally, also run `./regen-fsdata.sh`
+## Code Overview
+-   **`pokemon_trading.py`**: Contains the core data-agnostic trading logic (`execute_trade`), evolution rules (`check_and_perform_trade_evolution`), and initial database schema setup (`setup_database`). The `if __name__ == '__main__':` block in this script is responsible for populating the database with rich sample data for testing.
+-   **`pokemon_web_app/app.py`**: Implements the Flask web application, defining routes for viewing Pokemon, initiating trades, handling offers, and confirming trades. It uses an in-memory dictionary (`active_trades`) to manage ongoing trade sessions.
+
+This project demonstrates a simulation of core Pokemon trading features with a focus on accurate evolution mechanics for the specified generations.
