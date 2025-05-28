@@ -423,14 +423,15 @@ int fs_open_custom(struct fs_file *file, const char *name) {
             written = snprintf(buffer, remaining,
                 "{\"slot\":%zu,\"species\":\"%s\",\"nickname\":\"%s\",\"level\":%d,"
                 "\"type1\":\"%s\",\"type2\":\"%s\",\"trainer\":\"%s\","
-                "\"timestamp\":%lu,\"game\":\"%s\"}",
+                "\"trainer_id\":%u,\"timestamp\":%lu,\"game\":\"%s\"}",
                 i,
-                pokemon_get_species_name(pokemon->species),
+                pokemon_get_species_name(pokemon->core.species),
                 pokemon->nickname,
-                pokemon->level,
-                pokemon_get_type_name(pokemon->type1),
-                pokemon_get_type_name(pokemon->type2),
+                pokemon->core.level,
+                pokemon_get_type_name(pokemon->core.type1),
+                pokemon_get_type_name(pokemon->core.type2),
                 pokemon->ot_name,
+                pokemon->core.original_trainer_id,
                 pokemon_list[i].timestamp,
                 pokemon_list[i].game_version);
             buffer += written;

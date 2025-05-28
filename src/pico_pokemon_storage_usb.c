@@ -60,13 +60,14 @@ void handle_usb_commands(void) {
                 for (size_t i = 0; i < MAX_STORED_POKEMON; i++) {
                     if (pokemon_list[i].occupied) {
                         const pokemon_data_t* pokemon = &pokemon_list[i].pokemon;
-                        printf("Slot %zu: %s (Lv.%d) - %s/%s - Trainer: %s\n",
+                        printf("Slot %zu: %s (Lv.%d) - %s/%s - Trainer: %s (ID: 0x%04X)\n",
                                i,
-                               pokemon_get_species_name(pokemon->species),
-                               pokemon->level,
-                               pokemon_get_type_name(pokemon->type1),
-                               pokemon_get_type_name(pokemon->type2),
-                               pokemon->ot_name);
+                               pokemon_get_species_name(pokemon->core.species),
+                               pokemon->core.level,
+                               pokemon_get_type_name(pokemon->core.type1),
+                               pokemon_get_type_name(pokemon->core.type2),
+                               pokemon->ot_name,
+                               pokemon->core.original_trainer_id);
                     }
                 }
                 

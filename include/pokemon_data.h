@@ -53,8 +53,13 @@ typedef struct __attribute__((packed)) {
     uint16_t defense;            // 0x26: Defense stat (2 bytes)
     uint16_t speed;              // 0x28: Speed stat (2 bytes)
     uint16_t special;            // 0x2A: Special stat (2 bytes)
-    char nickname[POKEMON_NAME_LENGTH];    // Pokemon nickname (stored separately)
-    char ot_name[POKEMON_OT_NAME_LENGTH];  // Original trainer name (stored separately)
+} pokemon_core_data_t;
+
+// Complete Pokemon data including nickname and trainer info (stored separately per Gen I spec)
+typedef struct {
+    pokemon_core_data_t core;                      // Core 44-byte Pokemon data
+    char nickname[POKEMON_NAME_LENGTH];            // Pokemon nickname (11 bytes, stored separately)
+    char ot_name[POKEMON_OT_NAME_LENGTH];          // Original trainer name (11 bytes, stored separately)
 } pokemon_data_t;
 
 // Storage slot for Pokemon
@@ -66,7 +71,7 @@ typedef struct {
     uint8_t checksum;       // Data integrity check
 } pokemon_slot_t;
 
-// Trading session info
+// Trading session info with enhanced trainer data handling
 typedef struct {
     trade_state_t state;
     uint32_t session_start_time;
@@ -77,6 +82,12 @@ typedef struct {
     uint8_t error_count;
     char partner_name[16];
     bool needs_internal_reset; // Flag to reset internal static states
+    
+    // Enhanced trainer/party information
+    uint16_t local_trainer_id;                     // Our trainer ID for outgoing Pokemon
+    char local_trainer_name[POKEMON_OT_NAME_LENGTH]; // Our trainer name for outgoing Pokemon
+    uint8_t local_party_count;                     // Number of Pokemon in our party
+    bool bidirectional_mode;                       // True when both sides send simultaneously
 } trade_session_t;
 
 // Function declarations

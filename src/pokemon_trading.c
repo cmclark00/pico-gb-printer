@@ -29,75 +29,77 @@ static bool pokemon_create_test_pokemon(pokemon_data_t* pokemon, uint8_t species
     
     memset(pokemon, 0, sizeof(pokemon_data_t));
     
-    pokemon->species = species;
-    pokemon->level = level;
-    pokemon->current_hp = level * 2 + 50; // Simple HP calculation
-    pokemon->status = 0; // No status conditions
+    // Set core Pokemon data
+    pokemon->core.species = species;
+    pokemon->core.level = level;
+    pokemon->core.current_hp = level * 2 + 50; // Simple HP calculation
+    pokemon->core.status = 0; // No status conditions
     
     // Set types based on species (simplified)
     switch (species) {
         case 0x01: // Bulbasaur
-            pokemon->type1 = 12; // Grass
-            pokemon->type2 = 3;  // Poison
+            pokemon->core.type1 = 12; // Grass
+            pokemon->core.type2 = 3;  // Poison
             break;
         case 0x04: // Charmander
-            pokemon->type1 = 20; // Fire
-            pokemon->type2 = 20; // Fire
+            pokemon->core.type1 = 20; // Fire
+            pokemon->core.type2 = 20; // Fire
             break;
         case 0x07: // Squirtle
-            pokemon->type1 = 21; // Water
-            pokemon->type2 = 21; // Water
+            pokemon->core.type1 = 21; // Water
+            pokemon->core.type2 = 21; // Water
             break;
         case 0x19: // Pikachu
-            pokemon->type1 = 13; // Electric
-            pokemon->type2 = 13; // Electric
+            pokemon->core.type1 = 13; // Electric
+            pokemon->core.type2 = 13; // Electric
             break;
         default:
-            pokemon->type1 = 0; // Normal
-            pokemon->type2 = 0; // Normal
+            pokemon->core.type1 = 0; // Normal
+            pokemon->core.type2 = 0; // Normal
             break;
     }
     
-    pokemon->catch_rate = 45;
-    pokemon->moves[0] = 1; // Pound
-    pokemon->moves[1] = 0; // No move
-    pokemon->moves[2] = 0; // No move
-    pokemon->moves[3] = 0; // No move
+    pokemon->core.catch_rate = 45;
+    pokemon->core.moves[0] = 1; // Pound
+    pokemon->core.moves[1] = 0; // No move
+    pokemon->core.moves[2] = 0; // No move
+    pokemon->core.moves[3] = 0; // No move
     
-    pokemon->original_trainer_id = 12345;
+    // Generate a unique trainer ID based on species and level for testing
+    pokemon->core.original_trainer_id = (species << 8) | level;
     
     // Set experience as 3-byte array (little endian)
     uint32_t exp = (level * level * level); // Simple exp calculation
-    pokemon->experience[0] = exp & 0xFF;
-    pokemon->experience[1] = (exp >> 8) & 0xFF;
-    pokemon->experience[2] = (exp >> 16) & 0xFF;
+    pokemon->core.experience[0] = exp & 0xFF;
+    pokemon->core.experience[1] = (exp >> 8) & 0xFF;
+    pokemon->core.experience[2] = (exp >> 16) & 0xFF;
     
     // Set stat experience (EVs)
-    pokemon->hp_exp = 1000;
-    pokemon->attack_exp = 1000;
-    pokemon->defense_exp = 1000;
-    pokemon->speed_exp = 1000;
-    pokemon->special_exp = 1000;
+    pokemon->core.hp_exp = 1000;
+    pokemon->core.attack_exp = 1000;
+    pokemon->core.defense_exp = 1000;
+    pokemon->core.speed_exp = 1000;
+    pokemon->core.special_exp = 1000;
     
     // Set IVs (simplified)
-    pokemon->iv_data[0] = 0xAA;
-    pokemon->iv_data[1] = 0xAA;
+    pokemon->core.iv_data[0] = 0xAA;
+    pokemon->core.iv_data[1] = 0xAA;
     
     // Set PP
-    pokemon->move_pp[0] = 35;
-    pokemon->move_pp[1] = 0;
-    pokemon->move_pp[2] = 0;
-    pokemon->move_pp[3] = 0;
+    pokemon->core.move_pp[0] = 35;
+    pokemon->core.move_pp[1] = 0;
+    pokemon->core.move_pp[2] = 0;
+    pokemon->core.move_pp[3] = 0;
     
     // Set duplicate level (required by Gen 1 format)
-    pokemon->level_copy = level;
+    pokemon->core.level_copy = level;
     
     // Calculate and set stats (simple formulas)
-    pokemon->max_hp = pokemon->current_hp;
-    pokemon->attack = level + 20;
-    pokemon->defense = level + 15;
-    pokemon->speed = level + 10;
-    pokemon->special = level + 25;
+    pokemon->core.max_hp = pokemon->core.current_hp;
+    pokemon->core.attack = level + 20;
+    pokemon->core.defense = level + 15;
+    pokemon->core.speed = level + 10;
+    pokemon->core.special = level + 25;
     
     // Set nickname and trainer name
     strncpy(pokemon->nickname, nickname, POKEMON_NAME_LENGTH - 1);
@@ -117,6 +119,13 @@ void pokemon_trading_init(void) {
     memset(&current_session, 0, sizeof(current_session));
     current_session.state = TRADE_STATE_IDLE;
     
+    // Initialize local trainer information
+    current_session.local_trainer_id = 0x1234; // Default trainer ID for our system
+    strncpy(current_session.local_trainer_name, "PICO", POKEMON_OT_NAME_LENGTH - 1);
+    current_session.local_trainer_name[POKEMON_OT_NAME_LENGTH - 1] = '\0';
+    current_session.local_party_count = 0;
+    current_session.bidirectional_mode = false;
+    
     // Clear logs and errors
     memset(trade_log, 0, sizeof(trade_log));
     memset(last_error, 0, sizeof(last_error));
@@ -124,25 +133,31 @@ void pokemon_trading_init(void) {
     
     pokemon_log_trade_event("SYSTEM", "Pokemon trading system initialized");
     
-    // Add some test Pokemon for trading
+    // Add some test Pokemon for trading with proper trainer info
     pokemon_data_t test_pokemon;
     
     // Add a Pikachu
     if (pokemon_create_test_pokemon(&test_pokemon, 0x19, 25, "PIKACHU", "ASH")) {
         pokemon_store_received(&test_pokemon, "TEST_DATA");
+        current_session.local_party_count++;
     }
     
     // Add a Charmander  
     if (pokemon_create_test_pokemon(&test_pokemon, 0x04, 15, "CHARMANDER", "RED")) {
         pokemon_store_received(&test_pokemon, "TEST_DATA");
+        current_session.local_party_count++;
     }
     
     // Add a Squirtle
     if (pokemon_create_test_pokemon(&test_pokemon, 0x07, 20, "SQUIRTLE", "BLUE")) {
         pokemon_store_received(&test_pokemon, "TEST_DATA");
+        current_session.local_party_count++;
     }
     
-    pokemon_log_trade_event("SYSTEM", "Added test Pokemon for trading");
+    char init_msg[64];
+    snprintf(init_msg, sizeof(init_msg), "Added %d test Pokemon for trading (Trainer: %s, ID: 0x%04X)", 
+             current_session.local_party_count, current_session.local_trainer_name, current_session.local_trainer_id);
+    pokemon_log_trade_event("SYSTEM", init_msg);
 }
 
 void pokemon_trading_update(void) {
@@ -674,7 +689,11 @@ void pokemon_trading_update(void) {
 
                     if (imidazole_received_bytes >= POKEMON_OT_NAME_LENGTH) {
                         pokemon_log_trade_event("RECV_OT_DONE", "Incoming OT name received.");
-                        memcpy(&current_session.incoming_pokemon, imidazole_receive_buffer, POKEMON_DATA_SIZE);
+                        
+                        // Copy the core Pokemon data (44 bytes) to the core structure
+                        memcpy(&current_session.incoming_pokemon.core, imidazole_receive_buffer, POKEMON_DATA_SIZE);
+                        
+                        // Copy nickname and OT name separately
                         memcpy(current_session.incoming_pokemon.nickname, imidazole_receive_buffer + POKEMON_DATA_SIZE, POKEMON_NAME_LENGTH);
                         current_session.incoming_pokemon.nickname[POKEMON_NAME_LENGTH-1] = '\0'; // Ensure null termination
                         memcpy(current_session.incoming_pokemon.ot_name, imidazole_receive_buffer + POKEMON_DATA_SIZE + POKEMON_NAME_LENGTH, POKEMON_OT_NAME_LENGTH);
@@ -685,10 +704,11 @@ void pokemon_trading_update(void) {
                         imidazole_received_bytes = 0; // Reset for next potential reception
                         
                         char trade_msg[128];
-                        snprintf(trade_msg, sizeof(trade_msg), "Complete Pokemon received: %s (Lv.%d) from %s", 
-                                pokemon_get_species_name(current_session.incoming_pokemon.species),
-                                current_session.incoming_pokemon.level,
-                                current_session.incoming_pokemon.ot_name);
+                        snprintf(trade_msg, sizeof(trade_msg), "Complete Pokemon received: %s (Lv.%d) from %s (Trainer ID: 0x%04X)", 
+                                pokemon_get_species_name(current_session.incoming_pokemon.core.species),
+                                current_session.incoming_pokemon.core.level,
+                                current_session.incoming_pokemon.ot_name,
+                                current_session.incoming_pokemon.core.original_trainer_id);
                         pokemon_log_trade_event("TRADE", trade_msg);
 
                         if (pokemon_validate_data(&current_session.incoming_pokemon)) {
@@ -697,7 +717,7 @@ void pokemon_trading_update(void) {
                             // or go to confirmation if we've already sent ours.
                             // For a simple sequential trade: GB sends -> Pico sends -> Confirm
                             // We'll transition to SENDING_POKEMON if we have one prepared by pokemon_send_stored.
-                            if (current_session.outgoing_pokemon.species != 0) { // Check if there's an outgoing Pokemon
+                            if (current_session.outgoing_pokemon.core.species != 0) { // Check if there's an outgoing Pokemon
                                 current_session.state = TRADE_STATE_SENDING_POKEMON;
                                 current_session.needs_internal_reset = true; // Initialize sender
                                 pokemon_log_trade_event("STATE", "RX_POKEMON -> SENDING_POKEMON (Got theirs, now send ours)");
@@ -749,7 +769,8 @@ void pokemon_trading_update(void) {
 
                 if (sending_outgoing_pokemon_core_data) {
                     if (outgoing_data_sent_bytes < POKEMON_DATA_SIZE) {
-                        byte_to_transmit = ((uint8_t*)&current_session.outgoing_pokemon)[outgoing_data_sent_bytes];
+                        // Send core Pokemon data (44 bytes) from the .core structure
+                        byte_to_transmit = ((uint8_t*)&current_session.outgoing_pokemon.core)[outgoing_data_sent_bytes];
                         snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "SEND: TX:0x%02X (Core byte %zu/%d) / RX:0x%02X", byte_to_transmit, outgoing_data_sent_bytes + 1, POKEMON_DATA_SIZE, received_byte);
                         outgoing_data_sent_bytes++;
                     } else {
@@ -850,8 +871,8 @@ void pokemon_trading_update(void) {
                             char completion_msg[128];
                             snprintf(completion_msg, sizeof(completion_msg), 
                                     "Trade completed! Received %s (Lv.%d) from %s", 
-                                    pokemon_get_species_name(current_session.incoming_pokemon.species),
-                                    current_session.incoming_pokemon.level,
+                                    pokemon_get_species_name(current_session.incoming_pokemon.core.species),
+                                    current_session.incoming_pokemon.core.level,
                                     current_session.incoming_pokemon.ot_name);
                             pokemon_log_trade_event("TRADE", completion_msg);
                             
@@ -860,8 +881,8 @@ void pokemon_trading_update(void) {
                                 char sent_msg[128];
                                 snprintf(sent_msg, sizeof(sent_msg), 
                                         "Sent %s (Lv.%d) to partner", 
-                                        pokemon_get_species_name(pokemon_storage[1].pokemon.species),
-                                        pokemon_storage[1].pokemon.level);
+                                        pokemon_get_species_name(pokemon_storage[1].pokemon.core.species),
+                                        pokemon_storage[1].pokemon.core.level);
                                 pokemon_log_trade_event("TRADE", sent_msg);
                                 
                                 // Remove Pokemon #2 from storage
@@ -947,8 +968,8 @@ bool pokemon_store_received(const pokemon_data_t* pokemon, const char* source_ga
             
             char log_msg[128];
             snprintf(log_msg, sizeof(log_msg), "Stored %s (Lv.%d) in slot %zu", 
-                    pokemon_get_species_name(pokemon->species), 
-                    pokemon->level, i);
+                    pokemon_get_species_name(pokemon->core.species), 
+                    pokemon->core.level, i);
             pokemon_log_trade_event("STORAGE", log_msg);
             
             return true;
@@ -973,7 +994,7 @@ bool pokemon_delete_stored(size_t index) {
     
     char log_msg[128];
     snprintf(log_msg, sizeof(log_msg), "Deleted %s from slot %zu", 
-            pokemon_get_species_name(pokemon_storage[index].pokemon.species), 
+            pokemon_get_species_name(pokemon_storage[index].pokemon.core.species), 
             index);
     
     memset(&pokemon_storage[index], 0, sizeof(pokemon_slot_t));
@@ -997,8 +1018,8 @@ bool pokemon_send_stored(size_t index) {
 
     char log_msg[128];
     snprintf(log_msg, sizeof(log_msg), "Prepared %s (Lv.%d) from slot %zu for sending",
-            pokemon_get_species_name(pokemon_storage[index].pokemon.species),
-            pokemon_storage[index].pokemon.level, index);
+            pokemon_get_species_name(pokemon_storage[index].pokemon.core.species),
+            pokemon_storage[index].pokemon.core.level, index);
     pokemon_log_trade_event("STORAGE", log_msg);
     pokemon_log_trade_event("STATE", "User Action -> SENDING_POKEMON");
 

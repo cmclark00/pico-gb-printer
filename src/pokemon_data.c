@@ -198,20 +198,30 @@ bool pokemon_validate_data(const pokemon_data_t* pokemon) {
     }
     
     // Check for valid species (1-151 for Gen 1)
-    if (pokemon->species == 0 || pokemon->species > 151) {
+    if (pokemon->core.species == 0 || pokemon->core.species > 151) {
         return false;
     }
     
     // Check for reasonable level (1-100)
-    if (pokemon->level == 0 || pokemon->level > 100) {
+    if (pokemon->core.level == 0 || pokemon->core.level > 100) {
+        return false;
+    }
+    
+    // Check level consistency (level_copy should match level)
+    if (pokemon->core.level != pokemon->core.level_copy) {
         return false;
     }
     
     // Check for valid moves (0 = no move, 1-165 for Gen 1)
     for (int i = 0; i < 4; i++) {
-        if (pokemon->moves[i] > 165) {
+        if (pokemon->core.moves[i] > 165) {
             return false;
         }
+    }
+    
+    // Check that current HP doesn't exceed max HP
+    if (pokemon->core.current_hp > pokemon->core.max_hp) {
+        return false;
     }
     
     // Check nickname and OT name are null-terminated
@@ -237,10 +247,21 @@ bool pokemon_validate_data(const pokemon_data_t* pokemon) {
 
 uint8_t pokemon_calculate_checksum(const pokemon_data_t* pokemon) {
     uint8_t checksum = 0;
-    const uint8_t* data = (const uint8_t*)pokemon;
     
-    for (size_t i = 0; i < sizeof(pokemon_data_t); i++) {
-        checksum ^= data[i];
+    // Calculate checksum for core data (44 bytes)
+    const uint8_t* core_data = (const uint8_t*)&pokemon->core;
+    for (size_t i = 0; i < sizeof(pokemon_core_data_t); i++) {
+        checksum ^= core_data[i];
+    }
+    
+    // Include nickname in checksum
+    for (size_t i = 0; i < POKEMON_NAME_LENGTH && pokemon->nickname[i] != '\0'; i++) {
+        checksum ^= (uint8_t)pokemon->nickname[i];
+    }
+    
+    // Include OT name in checksum
+    for (size_t i = 0; i < POKEMON_OT_NAME_LENGTH && pokemon->ot_name[i] != '\0'; i++) {
+        checksum ^= (uint8_t)pokemon->ot_name[i];
     }
     
     return checksum;
