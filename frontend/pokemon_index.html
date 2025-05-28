@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>Pokemon Storage System</title>
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#cc3366">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="white">
+  <meta name="apple-mobile-web-app-title" content="Pokemon Storage">
+  <meta name="application-name" content="Pokemon Storage">
+  <meta name="msapplication-TileColor" content="#ece6e6">
+  <meta name="theme-color" content="#ece6e6">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      color: #333;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    header {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 15px;
+      padding: 20px;
+      margin-bottom: 30px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+    
+    h1 {
+      color: #2c3e50;
+      text-align: center;
+      margin-bottom: 10px;
+      font-size: 2.5em;
+    }
+    
+    .status-indicator {
+      font-size: 0.6em;
+      padding: 4px 8px;
+      border-radius: 12px;
+      margin-left: 10px;
+      font-weight: normal;
+    }
+    
+    .status-indicator.connected {
+      background: #27ae60;
+      color: white;
+    }
+    
+    .status-indicator.disconnected {
+      background: #e74c3c;
+      color: white;
+    }
+    
+    .status-indicator.error {
+      background: #f39c12;
+      color: white;
+    }
+    
+    .controls {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 30px;
+      flex-wrap: wrap;
+    }
+    
+    .btn {
+      background: linear-gradient(45deg, #3498db, #2980b9);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-weight: 600;
+      text-decoration: none;
+      display: inline-block;
+    }
+    
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+    }
+    
+    .btn.danger {
+      background: linear-gradient(45deg, #e74c3c, #c0392b);
+    }
+    
+    .btn.success {
+      background: linear-gradient(45deg, #27ae60, #229954);
+    }
+    
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+    }
+    
+    @media (min-width: 1400px) {
+      .grid {
+        grid-template-columns: 2fr 1.5fr;
+      }
+    }
+    
+    .card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 15px;
+      padding: 25px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+    
+    .card h2 {
+      color: #2c3e50;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #ecf0f1;
+    }
+    
+    .pokemon-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+    }
+    
+    .pokemon-card {
+      background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+      border-radius: 12px;
+      padding: 20px;
+      border: 2px solid #dee2e6;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+    
+    .pokemon-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+      border-color: #3498db;
+    }
+    
+    .pokemon-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    
+    .pokemon-name {
+      font-size: 1.3em;
+      font-weight: bold;
+      color: #2c3e50;
+    }
+    
+    .pokemon-level {
+      background: #3498db;
+      color: white;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 0.9em;
+      font-weight: bold;
+    }
+    
+    .pokemon-info {
+      margin-bottom: 15px;
+    }
+    
+    .pokemon-info div {
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+    
+    .type-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 0.8em;
+      font-weight: bold;
+      margin: 0 2px;
+    }
+    
+    .type-normal { background: #A8A878; color: white; }
+    .type-fire { background: #F08030; color: white; }
+    .type-water { background: #6890F0; color: white; }
+    .type-electric { background: #F8D030; color: black; }
+    .type-grass { background: #78C850; color: white; }
+    .type-ice { background: #98D8D8; color: black; }
+    .type-fighting { background: #C03028; color: white; }
+    .type-poison { background: #A040A0; color: white; }
+    .type-ground { background: #E0C068; color: black; }
+    .type-flying { background: #A890F0; color: white; }
+    .type-psychic { background: #F85888; color: white; }
+    .type-bug { background: #A8B820; color: white; }
+    .type-rock { background: #B8A038; color: white; }
+    .type-ghost { background: #705898; color: white; }
+    .type-dragon { background: #7038F8; color: white; }
+    
+    .pokemon-actions {
+      display: flex;
+      gap: 10px;
+    }
+    
+    .pokemon-actions .btn {
+      padding: 8px 16px;
+      font-size: 0.9em;
+      flex: 1;
+    }
+    
+    .trade-log {
+      background: #2c3e50;
+      color: #ecf0f1;
+      border-radius: 8px;
+      padding: 15px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+      height: 600px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      margin-bottom: 20px;
+      border: 2px solid #34495e;
+      scrollbar-width: thin;
+      scrollbar-color: #3498db #2c3e50;
+    }
+    
+    .trade-log::-webkit-scrollbar {
+      width: 8px;
+    }
+    
+    .trade-log::-webkit-scrollbar-track {
+      background: #2c3e50;
+    }
+    
+    .trade-log::-webkit-scrollbar-thumb {
+      background: #3498db;
+      border-radius: 4px;
+    }
+    
+    .log-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    
+    .log-controls label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.9em;
+      color: #7f8c8d;
+    }
+    
+    .log-controls input[type="checkbox"] {
+      margin: 0;
+    }
+    
+    .log-line {
+      margin-bottom: 2px;
+      padding: 2px 0;
+    }
+    
+    .log-line.protocol {
+      color: #3498db;
+      font-weight: bold;
+    }
+    
+    .log-line.error {
+      color: #e74c3c;
+      background: rgba(231, 76, 60, 0.1);
+      padding: 2px 4px;
+    }
+    
+    .log-line.trade {
+      color: #27ae60;
+    }
+    
+    .log-line.debug {
+      color: #f39c12;
+    }
+    
+    .log-line.system {
+      color: #9b59b6;
+    }
+    
+    .trade-status {
+      text-align: center;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-weight: bold;
+    }
+    
+    .trade-status.idle {
+      background: #ecf0f1;
+      color: #7f8c8d;
+    }
+    
+    .trade-status.active {
+      background: #3498db;
+      color: white;
+    }
+    
+    .trade-status.error {
+      background: #e74c3c;
+      color: white;
+    }
+    
+    .trade-status.complete {
+      background: #27ae60;
+      color: white;
+    }
+    
+    .log-entry.real-time {
+      color: #2ecc71;
+      font-weight: bold;
+    }
+    
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .controls {
+        justify-content: center;
+      }
+      
+      .pokemon-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Pokemon Storage System <span class="status-indicator" id="connectionStatus"></span></h1>
+      <p style="text-align: center; color: #7f8c8d; margin-top: 10px;">
+        Connect your Game Boy Color with a link cable to start trading Pokemon
+      </p>
+    </header>
+    
+    <div class="controls">
+      <button class="btn" onclick="refreshData()">🔄 Refresh</button>
+      <button class="btn success" onclick="startTrade()">🔗 Start Trade</button>
+      <button class="btn danger" onclick="resetTrading()">⚠️ Reset Trading</button>
+      <button class="btn" onclick="exportData()">💾 Export Data</button>
+    </div>
+    
+    <div class="grid">
+      <div class="card">
+        <h2>Stored Pokemon (<span id="pokemonCount">0</span>)</h2>
+        <div class="pokemon-grid" id="pokemonGrid">
+          <!-- Pokemon cards will be populated here -->
+        </div>
+      </div>
+      
+      <div class="card">
+        <h2>Trading Status</h2>
+        <div class="trade-status idle" id="tradeStatus">
+          Waiting for connection...
+        </div>
+        
+        <h3 style="margin-bottom: 10px;">Trade Log</h3>
+        <div class="log-controls">
+          <label>
+            <input type="checkbox" id="autoScroll" checked> Auto-scroll
+          </label>
+          <label>
+            <input type="checkbox" id="showDebug" checked> Debug
+          </label>
+          <label>
+            <input type="checkbox" id="showProtocol" checked> Protocol
+          </label>
+          <label>
+            <input type="checkbox" id="showTrade" checked> Trade
+          </label>
+          <button class="btn" onclick="clearLogs()" style="padding: 4px 8px; font-size: 0.8em;">🗑️ Clear</button>
+          <button class="btn" onclick="downloadLogs()" style="padding: 4px 8px; font-size: 0.8em;">📄 Download</button>
+          <button class="btn" onclick="pauseUpdates()" id="pauseBtn" style="padding: 4px 8px; font-size: 0.8em;">⏸️ Pause</button>
+        </div>
+        <div class="trade-log" id="tradeLog">
+          System initialized. Ready for trading.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let pokemonData = [];
+    let isConnected = false;
+    let updatesPaused = false;
+    let logHistory = [];
+    let lineNumber = 1;
+    
+    // WebSocket connection for real-time updates
+    let ws = null;
+    let wsReconnectInterval = null;
+    
+    // Initialize the application
+    async function init() {
+      await refreshData();
+      connectWebSocket(); // Start WebSocket connection
+      setInterval(updateStatus, 5000); // Fallback polling every 5 seconds
+    }
+    
+    // Refresh all data from the server
+    async function refreshData() {
+      try {
+        await Promise.all([
+          updatePokemonList(),
+          updateTradeStatus(),
+          updateTradeLogs()
+        ]);
+        updateConnectionStatus(true);
+      } catch (error) {
+        console.error('Failed to refresh data:', error);
+        updateConnectionStatus(false);
+      }
+    }
+    
+    // Update Pokemon list
+    async function updatePokemonList() {
+      const response = await fetch('/pokemon/list');
+      const data = await response.json();
+      pokemonData = data.pokemon || [];
+      renderPokemonGrid();
+    }
+    
+    // Update trade status
+    async function updateTradeStatus() {
+      const response = await fetch('/trade/status');
+      const data = await response.json();
+      
+      const statusElement = document.getElementById('tradeStatus');
+      statusElement.textContent = `Trade State: ${data.trade_state}`;
+      statusElement.className = `trade-status ${getStatusClass(data.trade_state)}`;
+      
+      if (data.error) {
+        statusElement.textContent += ` - Error: ${data.error}`;
+      }
+    }
+    
+    // Update trade logs with enhanced formatting
+    async function updateTradeLogs() {
+      if (updatesPaused) return;
+      
+      const response = await fetch('/trade/logs');
+      const data = await response.json();
+      
+      const logElement = document.getElementById('tradeLog');
+      const newLogs = data.logs || 'No logs available';
+      
+      // Parse and format logs
+      const formattedLogs = formatLogs(newLogs);
+      logElement.innerHTML = formattedLogs;
+      
+      // Auto-scroll if enabled
+      if (document.getElementById('autoScroll').checked) {
+        logElement.scrollTop = logElement.scrollHeight;
+      }
+    }
+    
+    // Format logs with colors and filtering
+    function formatLogs(logText) {
+      const lines = logText.split('\n');
+      const showDebug = document.getElementById('showDebug').checked;
+      const showProtocol = document.getElementById('showProtocol').checked;
+      const showTrade = document.getElementById('showTrade').checked;
+      
+      return lines.map((line, index) => {
+        if (!line.trim()) return '';
+        
+        const lineNum = String(index + 1).padStart(4, '0');
+        const lineClass = getLogLineClass(line);
+        
+        // Filter based on checkboxes
+        if (lineClass === 'debug' && !showDebug) return '';
+        if (lineClass === 'protocol' && !showProtocol) return '';
+        if (lineClass === 'trade' && !showTrade) return '';
+        
+        return `<div class="log-line ${lineClass}">[${lineNum}] ${escapeHtml(line)}</div>`;
+      }).filter(line => line).join('');
+    }
+    
+    // Determine log line class based on content
+    function getLogLineClass(line) {
+      if (line.includes('ERROR') || line.includes('Error')) return 'error';
+      if (line.includes('PROTOCOL') || line.includes('RX:') || line.includes('→')) return 'protocol';
+      if (line.includes('TRADE') || line.includes('Pokemon')) return 'trade';
+      if (line.includes('DEBUG') || line.includes('Unknown byte')) return 'debug';
+      if (line.includes('SYSTEM')) return 'system';
+      return '';
+    }
+    
+    // Escape HTML for safe display
+    function escapeHtml(text) {
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+    
+    // Render Pokemon grid
+    function renderPokemonGrid() {
+      const grid = document.getElementById('pokemonGrid');
+      const count = document.getElementById('pokemonCount');
+      
+      count.textContent = pokemonData.length;
+      
+      if (pokemonData.length === 0) {
+        grid.innerHTML = '<p style="text-align: center; color: #7f8c8d; grid-column: 1/-1;">No Pokemon stored yet. Connect your Game Boy and start trading!</p>';
+        return;
+      }
+      
+      grid.innerHTML = pokemonData.map(pokemon => `
+        <div class="pokemon-card">
+          <div class="pokemon-header">
+            <div class="pokemon-name">${pokemon.nickname || pokemon.species}</div>
+            <div class="pokemon-level">Lv. ${pokemon.level}</div>
+          </div>
+          <div class="pokemon-info">
+            <div><strong>Species:</strong> <span>${pokemon.species}</span></div>
+            <div><strong>Type:</strong> 
+              <span class="type-badge type-${pokemon.type1.toLowerCase()}">${pokemon.type1}</span>
+              ${pokemon.type2 !== pokemon.type1 ? `<span class="type-badge type-${pokemon.type2.toLowerCase()}">${pokemon.type2}</span>` : ''}
+            </div>
+            <div><strong>Trainer:</strong> <span>${pokemon.trainer}</span></div>
+            <div><strong>Game:</strong> <span>${pokemon.game}</span></div>
+            <div><strong>Received:</strong> <span>${new Date(pokemon.timestamp * 1000).toLocaleDateString()}</span></div>
+          </div>
+          <div class="pokemon-actions">
+            <button class="btn success" onclick="sendPokemon(${pokemon.slot})">📤 Send</button>
+            <button class="btn danger" onclick="deletePokemon(${pokemon.slot})">🗑️ Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+    
+    // Helper functions
+    function getStatusClass(state) {
+      if (state.includes('ERROR')) return 'error';
+      if (state === 'IDLE' || state === 'WAITING_FOR_PARTNER') return 'idle';
+      if (state === 'COMPLETE') return 'complete';
+      return 'active';
+    }
+    
+    function updateConnectionStatus(connected) {
+      const indicator = document.getElementById('connectionStatus');
+      indicator.className = `status-indicator ${connected ? 'connected' : ''}`;
+      indicator.title = connected ? 'Device connected' : 'Device disconnected';
+      isConnected = connected;
+    }
+    
+    // API calls
+    async function sendPokemon(slot) {
+      if (!confirm('Send this Pokemon back to the Game Boy?')) return;
+      
+      try {
+        const response = await fetch(`/pokemon/send?index=${slot}`);
+        if (response.ok) {
+          await refreshData();
+        }
+      } catch (error) {
+        alert('Failed to send Pokemon: ' + error.message);
+      }
+    }
+    
+    async function deletePokemon(slot) {
+      if (!confirm('Permanently delete this Pokemon?')) return;
+      
+      try {
+        const response = await fetch(`/pokemon/delete?index=${slot}`);
+        if (response.ok) {
+          await refreshData();
+        }
+      } catch (error) {
+        alert('Failed to delete Pokemon: ' + error.message);
+      }
+    }
+    
+    async function startTrade() {
+      alert('To start trading:\n\n1. Connect your Game Boy Color with a link cable\n2. Go to the Pokemon Center\n3. Access the Trade Center\n4. The device will automatically detect the trade request');
+    }
+    
+    async function resetTrading() {
+      if (!confirm('Reset the trading system?')) return;
+      
+      try {
+        const response = await fetch('/reset');
+        if (response.ok) {
+          await refreshData();
+        }
+      } catch (error) {
+        alert('Failed to reset trading: ' + error.message);
+      }
+    }
+    
+    function clearLogs() {
+      document.getElementById('tradeLog').textContent = '';
+    }
+    
+    async function downloadLogs() {
+      const logs = document.getElementById('tradeLog').textContent;
+      const blob = new Blob([logs], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pokemon_trade_logs_${new Date().toISOString().slice(0,10)}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    
+    async function exportData() {
+      const blob = new Blob([JSON.stringify(pokemonData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pokemon_storage_${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    
+    function pauseUpdates() {
+      updatesPaused = !updatesPaused;
+      const btn = document.getElementById('pauseBtn');
+      btn.textContent = updatesPaused ? '▶️ Resume' : '⏸️ Pause';
+      btn.title = updatesPaused ? 'Resume log updates' : 'Pause log updates';
+    }
+    
+    function updateStatus() {
+      updateTradeStatus();
+      updateTradeLogs();
+    }
+    
+    // WebSocket connection for real-time updates
+    function connectWebSocket() {
+      try {
+        ws = new WebSocket('ws://192.168.7.1:8080');
+        
+        ws.onopen = function(event) {
+          console.log('WebSocket connected');
+          document.getElementById('connectionStatus').textContent = 'Connected (Real-time)';
+          document.getElementById('connectionStatus').className = 'connected';
+          if (wsReconnectInterval) {
+            clearInterval(wsReconnectInterval);
+            wsReconnectInterval = null;
+          }
+        };
+        
+        ws.onmessage = function(event) {
+          try {
+            const data = JSON.parse(event.data);
+            handleWebSocketMessage(data);
+          } catch (e) {
+            console.error('Error parsing WebSocket message:', e);
+          }
+        };
+        
+        ws.onclose = function(event) {
+          console.log('WebSocket disconnected');
+          document.getElementById('connectionStatus').textContent = 'Disconnected (Fallback to polling)';
+          document.getElementById('connectionStatus').className = 'disconnected';
+          ws = null;
+          
+          // Try to reconnect every 5 seconds
+          if (!wsReconnectInterval) {
+            wsReconnectInterval = setInterval(connectWebSocket, 5000);
+          }
+        };
+        
+        ws.onerror = function(error) {
+          console.error('WebSocket error:', error);
+        };
+        
+      } catch (e) {
+        console.error('Failed to create WebSocket:', e);
+        // Fall back to polling
+        setTimeout(connectWebSocket, 5000);
+      }
+    }
+    
+    function handleWebSocketMessage(data) {
+      switch (data.type) {
+        case 'protocol':
+          addRealTimeLog(`${new Date().toLocaleTimeString()} - PROTOCOL: RX: ${data.rx} → TX: ${data.tx} (${data.state})`);
+          break;
+          
+        case 'trade_event':
+          addRealTimeLog(`${new Date().toLocaleTimeString()} - ${data.event}: ${data.message}`);
+          break;
+          
+        case 'pokemon_update':
+          updateStatus(); // Refresh Pokemon list
+          break;
+          
+        case 'status_update':
+          // Update status without full refresh
+          updateStatusFromData(data.data);
+          break;
+          
+        default:
+          console.log('Unknown WebSocket message type:', data.type);
+      }
+    }
+    
+    function addRealTimeLog(message) {
+      const logContainer = document.getElementById('logContainer');
+      if (!logContainer) return;
+      
+      const logEntry = document.createElement('div');
+      logEntry.className = 'log-entry real-time';
+      logEntry.textContent = message;
+      
+      // Add to the top of the log container
+      logContainer.insertBefore(logEntry, logContainer.firstChild);
+      
+      // Limit to 100 entries
+      while (logContainer.children.length > 100) {
+        logContainer.removeChild(logContainer.lastChild);
+      }
+    }
+    
+    // Modified status update function
+    function updateStatus() {
+      fetch('/status.json')
+        .then(response => response.json())
+        .then(data => updateStatusFromData(data))
+        .catch(error => {
+          console.error('Error fetching status:', error);
+          document.getElementById('connectionStatus').textContent = 'Error';
+          document.getElementById('connectionStatus').className = 'error';
+        });
+    }
+    
+    function updateStatusFromData(data) {
+      document.getElementById('storedCount').textContent = data.status.stored_pokemon;
+      document.getElementById('totalTrades').textContent = data.status.total_trades;
+      document.getElementById('tradeState').textContent = data.status.trade_state;
+      
+      // Update connection status if not using WebSocket
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        document.getElementById('connectionStatus').textContent = 'Connected (Polling)';
+        document.getElementById('connectionStatus').className = 'connected';
+      }
+    }
+    
+    // Start the application
+    init();
+  </script>
+</body>
+</html> 

@@ -27,7 +27,8 @@ void linkcable_reset(void) {
 void linkcable_init(irq_handler_t onDataReceive) {
     linkcable_program_init(LINKCABLE_PIO, LINKCABLE_SM, linkcable_pio_initial_pc = pio_add_program(LINKCABLE_PIO, &linkcable_program));
 
-//    pio_sm_put_blocking(LINKCABLE_PIO, LINKCABLE_SM, LINKCABLE_BITS - 1);
+    // Put initial value in TX FIFO so PIO can respond
+    pio_sm_put_blocking(LINKCABLE_PIO, LINKCABLE_SM, 0x00);
     pio_enable_sm_mask_in_sync(LINKCABLE_PIO, (1u << LINKCABLE_SM));
 
     if (onDataReceive) {

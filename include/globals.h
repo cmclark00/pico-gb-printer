@@ -1,7 +1,7 @@
 #ifndef _GLOBALS_H_INCLUDE_
 #define _GLOBALS_H_INCLUDE_
 
-#define ENABLE_DEBUG            false
+#define ENABLE_DEBUG            true
 #define BUFFER_SIZE_KB          128
 #define FILE_BUFFER_SIZE        16384
 

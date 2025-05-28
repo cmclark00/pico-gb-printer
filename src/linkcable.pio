@@ -1,7 +1,12 @@
-// Default pin configuration
-.define PUBLIC PIN_SCK     2
-.define PUBLIC PIN_SIN     0
-.define PUBLIC PIN_SOUT    3
+// Pin configuration matching existing hardware schematic
+.define PUBLIC PIN_SCK     2    ; Clock - Game Boy Pin 3 → GPIO 2
+.define PUBLIC PIN_SIN     0    ; Serial In (to Pico) - Game Boy Pin 4 → GPIO 0  
+.define PUBLIC PIN_SOUT    3    ; Serial Out (from Pico) - Game Boy Pin 2 → GPIO 3
+
+//// ALTERNATIVE CONFIGURATION FOR RP2040-Zero (if rewiring)
+// .define PUBLIC PIN_SCK     16   ; Clock - Game Boy Pin 5
+// .define PUBLIC PIN_SIN     15   ; Serial In - Game Boy Pin 3
+// .define PUBLIC PIN_SOUT    14   ; Serial Out - Game Boy Pin 2
 
 //// STACKSMASHING BOARD
 // .define PUBLIC PIN_SCK     0
