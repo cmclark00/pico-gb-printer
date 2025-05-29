@@ -4,6 +4,7 @@
 #include "websocket_server.h"
 #include "pico/time.h"
 #include "hardware/gpio.h"
+#include "char_encode.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -20,93 +21,115 @@ static trade_session_t current_session;
 static char trade_log[2048];
 static size_t log_position = 0;
 
+// Global trade block for the Pokemon this device will offer
+static trade_block_t g_trade_block_to_send;
+
 // Error tracking
 static char last_error[128];
 
-// Function to create a test Pokemon for trading
-static bool pokemon_create_test_pokemon(pokemon_data_t* pokemon, uint8_t species, uint8_t level, const char* nickname, const char* trainer_name) {
-    if (!pokemon) return false;
-    
-    memset(pokemon, 0, sizeof(pokemon_data_t));
-    
-    // Set core Pokemon data
-    pokemon->core.species = species;
-    pokemon->core.level = level;
-    pokemon->core.current_hp = level * 2 + 50; // Simple HP calculation
-    pokemon->core.status = 0; // No status conditions
-    
-    // Set types based on species (simplified)
-    switch (species) {
-        case 0x01: // Bulbasaur
-            pokemon->core.type1 = 12; // Grass
-            pokemon->core.type2 = 3;  // Poison
-            break;
-        case 0x04: // Charmander
-            pokemon->core.type1 = 20; // Fire
-            pokemon->core.type2 = 20; // Fire
-            break;
-        case 0x07: // Squirtle
-            pokemon->core.type1 = 21; // Water
-            pokemon->core.type2 = 21; // Water
-            break;
-        case 0x19: // Pikachu
-            pokemon->core.type1 = 13; // Electric
-            pokemon->core.type2 = 13; // Electric
-            break;
-        default:
-            pokemon->core.type1 = 0; // Normal
-            pokemon->core.type2 = 0; // Normal
-            break;
+// Helper function to convert 0x50-terminated names to null-terminated C strings
+static void convert_pokemon_name_from_block(char* dest, const char* src, size_t dest_size) {
+    if (!dest || !src || dest_size == 0) {
+        if (dest && dest_size > 0) dest[0] = '\0'; // Ensure null termination on error or empty input
+        return;
     }
+    // Assuming src is a uint8_t* effectively, as it contains encoded chars.
+    pokemon_encoded_array_to_str_until_terminator(dest, (const uint8_t*)src, dest_size);
+    // Explicitly ensure null-termination as a safeguard, in case the above function doesn't guarantee it
+    // if the source string fills dest_size without its own terminator.
+    if (dest_size > 0) {
+        dest[dest_size - 1] = '\0';
+    }
+}
+
+// Function to create a test Pokemon trade block for trading
+static bool pokemon_create_test_trade_block(trade_block_t* trade_data, uint8_t species_id, uint8_t level, const char* pkmn_nickname, const char* pkmn_ot_name, const char* player_trainer_name) {
+    if (!trade_data) return false;
     
-    pokemon->core.catch_rate = 45;
-    pokemon->core.moves[0] = 1; // Pound
-    pokemon->core.moves[1] = 0; // No move
-    pokemon->core.moves[2] = 0; // No move
-    pokemon->core.moves[3] = 0; // No move
+    // Clear the entire trade block initially
+    memset(trade_data, 0, sizeof(trade_block_t));
+
+    // 1. Player's Trainer Name (11 bytes)
+    // Ensure source string is not too long for POKEMON_NAME_LENGTH including terminator space
+    pokemon_str_to_encoded_array((uint8_t*)trade_data->player_trainer_name, player_trainer_name, POKEMON_NAME_LENGTH, true);
+
+    // 2. Party Count (1 byte)
+    trade_data->party_count = 1;
+
+    // 3. Party Species (7 bytes: 6 species + 0xFF terminator)
+    memset(trade_data->party_species, 0xFF, sizeof(trade_data->party_species));
+    trade_data->party_species[0] = species_id;
+
+    // 4. Pokemon Core Data for the first Pokemon (pokemon_data[0]) (44 bytes)
+    // The rest (pokemon_data[1] to pokemon_data[5]) will remain zeroed from the initial memset.
+    pokemon_core_data_t* pkmn_core = &trade_data->pokemon_data[0];
     
-    // Generate a unique trainer ID based on species and level for testing
-    pokemon->core.original_trainer_id = (species << 8) | level;
-    
-    // Set experience as 3-byte array (little endian)
-    uint32_t exp = (level * level * level); // Simple exp calculation
-    pokemon->core.experience[0] = exp & 0xFF;
-    pokemon->core.experience[1] = (exp >> 8) & 0xFF;
-    pokemon->core.experience[2] = (exp >> 16) & 0xFF;
-    
-    // Set stat experience (EVs)
-    pokemon->core.hp_exp = 1000;
-    pokemon->core.attack_exp = 1000;
-    pokemon->core.defense_exp = 1000;
-    pokemon->core.speed_exp = 1000;
-    pokemon->core.special_exp = 1000;
-    
-    // Set IVs (simplified)
-    pokemon->core.iv_data[0] = 0xAA;
-    pokemon->core.iv_data[1] = 0xAA;
-    
-    // Set PP
-    pokemon->core.move_pp[0] = 35;
-    pokemon->core.move_pp[1] = 0;
-    pokemon->core.move_pp[2] = 0;
-    pokemon->core.move_pp[3] = 0;
-    
-    // Set duplicate level (required by Gen 1 format)
-    pokemon->core.level_copy = level;
-    
-    // Calculate and set stats (simple formulas)
-    pokemon->core.max_hp = pokemon->core.current_hp;
-    pokemon->core.attack = level + 20;
-    pokemon->core.defense = level + 15;
-    pokemon->core.speed = level + 10;
-    pokemon->core.special = level + 25;
-    
-    // Set nickname and trainer name
-    strncpy(pokemon->nickname, nickname, POKEMON_NAME_LENGTH - 1);
-    pokemon->nickname[POKEMON_NAME_LENGTH - 1] = '\0';
-    strncpy(pokemon->ot_name, trainer_name, POKEMON_OT_NAME_LENGTH - 1);
-    pokemon->ot_name[POKEMON_OT_NAME_LENGTH - 1] = '\0';
-    
+    // Zero out the specific Pokemon core data struct first
+    memset(pkmn_core, 0, sizeof(pokemon_core_data_t));
+
+    // Essential fields for a recognizable Pokemon
+    pkmn_core->species = species_id;    // e.g., 0x19 for Pikachu
+    pkmn_core->level = level;          // e.g., 25
+    pkmn_core->level_copy = level;     // Copy of level
+    pkmn_core->catch_rate = 190;       // Pikachu's catch rate (important for validity)
+
+    // Basic stats (minimal values, linkcable_send_trade_block will bswap16 these)
+    pkmn_core->current_hp = 20;        // Example: 20 HP
+    pkmn_core->max_hp = 20;            // Example: 20 Max HP
+    pkmn_core->attack = 5;
+    pkmn_core->defense = 5;
+    pkmn_core->speed = 5;
+    pkmn_core->special = 5;
+
+    // Trainer ID (linkcable_send_trade_block will bswap16 this)
+    pkmn_core->original_trainer_id = 0x1234; // Example OT ID
+
+    // Types (important for display and validity)
+    if (species_id == 0x19) { // Pikachu
+        pkmn_core->type1 = POKEMON_TYPE_ELECTRIC;
+        pkmn_core->type2 = POKEMON_TYPE_ELECTRIC;
+    } else {
+        pkmn_core->type1 = POKEMON_TYPE_NORMAL; // Default for others
+        pkmn_core->type2 = POKEMON_TYPE_NORMAL;
+    }
+
+    // Minimal moves (e.g., first move Pound, rest empty)
+    pkmn_core->moves[0] = 1; // Pound
+    pkmn_core->moves[1] = 0;
+    pkmn_core->moves[2] = 0;
+    pkmn_core->moves[3] = 0;
+    pkmn_core->move_pp[0] = 35; // PP for Pound
+    pkmn_core->move_pp[1] = 0;
+    pkmn_core->move_pp[2] = 0;
+    pkmn_core->move_pp[3] = 0;
+
+    // Experience points (3 bytes, little-endian for a small amount)
+    //uint32_t exp_val = 100; // level * level * level; // Minimal exp
+    //pkmn_core->experience[0] = exp_val & 0xFF;
+    //pkmn_core->experience[1] = (exp_val >> 8) & 0xFF;
+    //pkmn_core->experience[2] = (exp_val >> 16) & 0xFF;
+    // EVs and IVs will be zero from memset, which is fine for a basic Pokemon.
+
+    // 5. Original Trainer Names (6 * 11 bytes)
+    // Fill the first OT name, rest with terminators.
+    pokemon_str_to_encoded_array((uint8_t*)trade_data->original_trainer_names[0], pkmn_ot_name, POKEMON_OT_NAME_LENGTH, true);
+
+    for (int i = 1; i < 6; ++i) {
+        // memset with TERM_ directly as these are unused and should be filled with terminator
+        memset(trade_data->original_trainer_names[i], TERM_, POKEMON_OT_NAME_LENGTH);
+    }
+
+    // 6. Pokemon Nicknames (6 * 11 bytes)
+    // Fill the first nickname, rest with terminators.
+    pokemon_str_to_encoded_array((uint8_t*)trade_data->pokemon_nicknames[0], pkmn_nickname, POKEMON_NAME_LENGTH, true);
+
+    for (int i = 1; i < 6; ++i) {
+        // memset with TERM_ directly
+        memset(trade_data->pokemon_nicknames[i], TERM_, POKEMON_NAME_LENGTH);
+    }
+
+    // TODO: mail_count and mail_data if ever needed, but Flipper's TradeBlockGenI doesn't use them for basic trades.
+
     return true;
 }
 
@@ -125,6 +148,9 @@ void pokemon_trading_init(void) {
     current_session.local_trainer_name[POKEMON_OT_NAME_LENGTH - 1] = '\0';
     current_session.local_party_count = 0;
     current_session.bidirectional_mode = false;
+    current_session.our_block_sent_this_exchange = false;
+    current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+    current_session.exchange_counter = 0;
     
     // Clear logs and errors
     memset(trade_log, 0, sizeof(trade_log));
@@ -134,30 +160,33 @@ void pokemon_trading_init(void) {
     pokemon_log_trade_event("SYSTEM", "Pokemon trading system initialized");
     
     // Add some test Pokemon for trading with proper trainer info
-    pokemon_data_t test_pokemon;
+    trade_block_t test_trade_block; // Temporary block for creation
     
     // Add a Pikachu
-    if (pokemon_create_test_pokemon(&test_pokemon, 0x19, 25, "PIKACHU", "ASH")) {
-        pokemon_store_received(&test_pokemon, "TEST_DATA");
-        current_session.local_party_count++;
+    if (pokemon_create_test_trade_block(&test_trade_block, 0x19, 25, "PIKACHU", "ASH", current_session.local_trainer_name)) {
+        // Copy the created test block to the global block to be sent
+        memcpy(&g_trade_block_to_send, &test_trade_block, sizeof(trade_block_t));
+        
+        // Log message for the new test block creation:
+        char init_msg[128];
+        snprintf(init_msg, sizeof(init_msg), "Prepared test trade block. Player: %.7s, Pokemon: %.7s (Species: %d, Lvl: %d)", 
+                 g_trade_block_to_send.player_trainer_name, 
+                 g_trade_block_to_send.pokemon_nicknames[0], 
+                 g_trade_block_to_send.pokemon_data[0].species, 
+                 g_trade_block_to_send.pokemon_data[0].level);
+        pokemon_log_trade_event("SYSTEM", init_msg);
+    } else {
+        pokemon_log_trade_event("ERROR", "Failed to create test trade block for Pikachu");
     }
     
-    // Add a Charmander  
-    if (pokemon_create_test_pokemon(&test_pokemon, 0x04, 15, "CHARMANDER", "RED")) {
-        pokemon_store_received(&test_pokemon, "TEST_DATA");
-        current_session.local_party_count++;
-    }
+    // Comment out other test Pokemon creations for now to simplify testing
+    // if (pokemon_create_test_trade_block(&test_trade_block, 0x04, 15, "CHARMANDER", "RED", current_session.local_trainer_name)) { 
+    //     // memcpy(&g_trade_block_to_send, &test_trade_block, sizeof(trade_block_t)); 
+    // }
     
-    // Add a Squirtle
-    if (pokemon_create_test_pokemon(&test_pokemon, 0x07, 20, "SQUIRTLE", "BLUE")) {
-        pokemon_store_received(&test_pokemon, "TEST_DATA");
-        current_session.local_party_count++;
-    }
-    
-    char init_msg[64];
-    snprintf(init_msg, sizeof(init_msg), "Added %d test Pokemon for trading (Trainer: %s, ID: 0x%04X)", 
-             current_session.local_party_count, current_session.local_trainer_name, current_session.local_trainer_id);
-    pokemon_log_trade_event("SYSTEM", init_msg);
+    // if (pokemon_create_test_trade_block(&test_trade_block, 0x07, 20, "SQUIRTLE", "BLUE", current_session.local_trainer_name)) { 
+    //     // memcpy(&g_trade_block_to_send, &test_trade_block, sizeof(trade_block_t)); 
+    // }
 }
 
 void pokemon_trading_update(void) {
@@ -205,195 +234,88 @@ void pokemon_trading_update(void) {
         case TRADE_STATE_IDLE:
             // Listen for Pokemon trading communication
             if (data_available) {
-                uint8_t response = 0x00; // Default response
-                static int save_sequence_count = 0;
-                
-                // Pokemon trading protocol responses
+                uint8_t response = PKMN_BLANK; // Default response
+                static int save_sequence_count = 0; // Should be reset if not in save sequence
+
                 switch (received_byte) {
-                    case 0x01: // Pokemon sync/handshake
-                        response = 0x01; // Sync back
+                    case PKMN_MASTER: // 0x01: Game Boy initiates as master
+                        response = PKMN_SLAVE; // We respond as slave
                         current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
-                        pokemon_log_trade_event("STATE", "IDLE → WAITING_PARTNER (sync/handshake)");
+                        pokemon_log_trade_event("STATE", "IDLE -> WAITING_PARTNER (Master/Slave Sync)");
                         save_sequence_count = 0;
                         break;
-                    case 0x02: // Pokemon trade request
-                        response = 0x02; // Accept trade
+                    
+                    case PKMN_CONNECTED: // 0x60: Often sent by GB when entering trade room / after selections
+                        response = PKMN_CONNECTED; // Echo
+                        current_session.state = TRADE_STATE_WAITING_FOR_PARTNER; // Move to a state where we expect menu selections or preamble
+                        pokemon_log_trade_event("STATE", "IDLE -> WAITING_PARTNER (Connected 0x60)");
+                        save_sequence_count = 0;
+                        break;
+
+                    // If we receive a menu highlight byte in IDLE,
+                    // it implies the GB is already in the menu. Echo and transition.
+                    case PKMN_MENU_TRADE_CENTRE_HIGHLIGHTED: // 0xD0
+                    case PKMN_MENU_COLOSSEUM_HIGHLIGHTED:    // 0xD1
+                    case PKMN_MENU_CANCEL_HIGHLIGHTED:       // 0xD2
+                        response = received_byte; // Echo the highlight byte
+                        current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
+                        pokemon_log_trade_event("STATE", "IDLE -> WAITING_PARTNER (Menu Highlight RX in IDLE)");
+                        char menu_idle_msg[64];
+                        snprintf(menu_idle_msg, sizeof(menu_idle_msg), "IDLE: RX:0x%02X -> TX:0x%02X (Menu Highlight)", received_byte, response);
+                        pokemon_log_trade_event("PROTOCOL", menu_idle_msg);
+                        save_sequence_count = 0; // Reset save sequence
+                        break;
+
+                    case PKMN_MENU_TRADE_CENTRE_SELECTED: // 0xD4: Trade Center selected while in IDLE
+                        response = PKMN_BLANK; // Respond with BLANK (consistent with WAITING_FOR_PARTNER state's response)
+                        current_session.state = TRADE_STATE_CONNECTED; // Transition to expect preamble
+                        pokemon_log_trade_event("STATE", "IDLE -> CONNECTED (Trade Center Selected in IDLE)");
+                        char tc_selected_idle_msg[64];
+                        snprintf(tc_selected_idle_msg, sizeof(tc_selected_idle_msg), "IDLE: RX:0x%02X -> TX:0x%02X (Trade Center Selected)", received_byte, response);
+                        pokemon_log_trade_event("PROTOCOL", tc_selected_idle_msg);
+                        save_sequence_count = 0; // Reset save sequence
+                        break;
+
+                    case SERIAL_PREAMBLE_BYTE: // 0xFD, if received in IDLE, assume trade is starting
+                        response = SERIAL_PREAMBLE_BYTE; // Echo 0xFD
                         current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("STATE", "IDLE → CONNECTED (trade request)");
-                        save_sequence_count = 0;
+                        // The TRADE_STATE_CONNECTED handler will initialize its sub-state and counter.
+                        pokemon_log_trade_event("STATE", "IDLE -> CONNECTED (Preamble 0xFD RX in IDLE)");
+                        char preamble_idle_msg[64];
+                        snprintf(preamble_idle_msg, sizeof(preamble_idle_msg), "IDLE: RX:0x%02X -> TX:0x%02X (Preamble Start)", received_byte, response);
+                        pokemon_log_trade_event("PROTOCOL", preamble_idle_msg);
+                        save_sequence_count = 0; // Reset save sequence
                         break;
-                    case 0x03: // Save game / status check (Cable Club entry)
-                        response = 0x00; // Acknowledge save
+
+                    // Handling for save sequence (entering cable club)
+                    case 0x03: // Save game / status check
+                        response = PKMN_BLANK; // Acknowledge save
                         save_sequence_count++;
-                        if (save_sequence_count >= 2) {
+                         if (save_sequence_count >= 2) { // Flipper seems to need a few of these
                             current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
-                            pokemon_log_trade_event("STATE", "IDLE → WAITING_PARTNER (save ack)");
-                            pokemon_log_trade_event("SAVE", "Game save acknowledged, entering Cable Club");
+                            pokemon_log_trade_event("STATE", "IDLE -> WAITING_FOR_PARTNER (Save Ack -> Cable Club Entry)");
                         }
                         break;
-                    case 0x06: // Menu confirmation / Enter room confirmation
-                        response = 0x06; // Echo confirmation
-                        pokemon_log_trade_event("MENU", "Room entry confirmed");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x00: // Continue/padding after save
-                        response = 0x00; // Continue
-                        if (save_sequence_count > 0) { // Only process as part of save sequence if count > 0
+                    case PKMN_BLANK: // 0x00: Continue/padding
+                        response = PKMN_BLANK;
+                        if (save_sequence_count > 0) {
                             save_sequence_count++;
-                            if (save_sequence_count >= 3) {
-                                pokemon_log_trade_event("SAVE", "Save sequence completed");
-                                save_sequence_count = 0; // Reset counter
+                            if (save_sequence_count >= 3) { // Arbitrary number, check Flipper if specific
+                                pokemon_log_trade_event("SAVE", "Save sequence likely complete.");
+                                // current_session.state might already be WAITING_FOR_PARTNER
+                                save_sequence_count = 0; 
                             }
-                            // No "Continuing after room entry" log here, as it's part of the problematic loop for initial 0x00s.
                         }
-                        // If save_sequence_count was 0, it remains 0. RX 0x00 results in TX 0x00 without side effects on save_sequence_count.
                         break;
-                    case 0x1C: // Menu navigation
-                        response = 0x1C; // Echo navigation
-                        pokemon_log_trade_event("MENU", "Menu navigation in Cable Club");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x60: // Trade Center selection
-                        response = 0x60; // Echo selection
-                        current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
-                        pokemon_log_trade_event("STATE", "IDLE → WAITING_PARTNER (Trade Center)");
-                        pokemon_log_trade_event("MENU", "Trade Center selected");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x61: // Colosseum selection
-                        response = 0x61; // Echo selection
-                        pokemon_log_trade_event("MENU", "Colosseum selected");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x62: // Trade request
-                        response = 0x62;
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("STATE", "IDLE → CONNECTED (trade request 0x62)");
-                        pokemon_log_trade_event("TRADE", "Trade request accepted");
-                        break;
-                    case 0x63: case 0x64: case 0x65: case 0x66: case 0x67: case 0x68: case 0x69:
-                    case 0x6A: case 0x6B: case 0x6C: case 0x6D: case 0x6E:
-                        // Menu selection options (0x63-0x6E from possible_indexes range)
-                        response = received_byte; // Echo selection
-                        current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
-                        char sel_msg_buf[128]; // Buffer for state log
-                        snprintf(sel_msg_buf, sizeof(sel_msg_buf), "IDLE → WAITING_PARTNER (menu sel 0x%02X)", received_byte);
-                        pokemon_log_trade_event("STATE", sel_msg_buf);
-                        snprintf(sel_msg_buf, sizeof(sel_msg_buf), "Partner selected Pokemon #%d, offering our Pokemon #2 - transitioning to connected", received_byte);
-                        pokemon_log_trade_event("SELECTION", sel_msg_buf);
-                        char menu_msg_buf[128]; // Buffer for state log
-                        snprintf(menu_msg_buf, sizeof(menu_msg_buf), "Menu selection 0x%02X", received_byte);
-                        pokemon_log_trade_event("MENU", menu_msg_buf);
-                        save_sequence_count = 0;
-                        break;
-                    case 0x6F: // Stop/cancel trade
-                        response = 0x6F; // Echo stop
-                        current_session.state = TRADE_STATE_IDLE;
-                        pokemon_log_trade_event("STATE", "ANY → IDLE (stop/cancel 0x6F)");
-                        pokemon_log_trade_event("TRADE", "Trade stopped/cancelled by partner");
-                        save_sequence_count = 0;
-                        break;
-                    case 0xD0: case 0xD1: case 0xD2: case 0xD3: case 0xD4:
-                        // Room states from enter_room_states specification
-                        response = received_byte; // Echo room state
-                        current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
-                        char room_msg_buf[128]; // Buffer for state log
-                        snprintf(room_msg_buf, sizeof(room_msg_buf), "IDLE → WAITING_PARTNER (room state 0x%02X)", received_byte);
-                        pokemon_log_trade_event("STATE", room_msg_buf);
-                        snprintf(room_msg_buf, sizeof(room_msg_buf), "Room state 0x%02X", received_byte);
-                        pokemon_log_trade_event("ROOM", room_msg_buf);
-                        save_sequence_count = 0;
-                        break;
-                    case 0xFE: // No input signal
-                        response = 0x00; // Continue/ready
-                        pokemon_log_trade_event("PROTOCOL", "No input signal (0xFE) - sending continue");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x70: // Trading protocol
-                        response = 0x70; // Echo
-                        pokemon_log_trade_event("TRADE", "Trading protocol start");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x71: // Trading handshake
-                        response = 0x71; // Echo
-                        pokemon_log_trade_event("TRADE", "Trading handshake");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x72: // Trading ready
-                        response = 0x72; // Echo
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("TRADE", "Ready to trade");
-                        save_sequence_count = 0;
-                        break;
-                    case 0xC0: // Enter trading room / Both players ready
-                        response = 0xC0; // Echo confirmation
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("TRADE", "Entering trading room - both players ready!");
-                        save_sequence_count = 0;
-                        break;
-                    case 0xFD: // Preamble byte
-                        response = 0xFD; // Echo preamble
-                        current_session.state = TRADE_STATE_RECEIVING_POKEMON;
-                        pokemon_log_trade_event("STATE", "IDLE → RX_POKEMON (preamble 0xFD)");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x04: // Pokemon selection (slot 4) - transition to connected
-                        response = 0x02; // We offer Pokemon #2 in response
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("STATE", "IDLE → CONNECTED (partner sel 0x04)");
-                        pokemon_log_trade_event("SELECTION", "Partner selected Pokemon #4, offering our Pokemon #2 - transitioning to connected state");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x05: // Pokemon selection (slot 5) - transition to connected  
-                        response = 0x02; // We offer Pokemon #2 in response
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("STATE", "IDLE → CONNECTED (partner sel 0x05)");
-                        pokemon_log_trade_event("SELECTION", "Partner selected Pokemon #5, offering our Pokemon #2 - transitioning to connected state");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x07: // Pokemon selection continuation or confirm
-                        response = 0x00; // Continue/ready
-                        pokemon_log_trade_event("SELECTION", "Selection continuation - sending continue");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x08: // Cancel/back in Pokemon selection - but continue offering trade
-                        response = 0x08; // Echo back the cancel
-                        // Stay in TRADE_STATE_IDLE to continue the selection process
-                        pokemon_log_trade_event("SELECTION", "Selection cancel/back - echoing back");
-                        save_sequence_count = 0;
-                        break;
-                    case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E: case 0x0F:
-                        // Other selection/menu bytes - keep offering our Pokemon
-                        response = 0x00; // Continue/ready
-                        char selection_msg[64];
-                        snprintf(selection_msg, sizeof(selection_msg), "Menu byte 0x%02X - sending continue", received_byte);
-                        pokemon_log_trade_event("SELECTION", selection_msg);
-                        save_sequence_count = 0;
-                        break;
+                    
+                    // Catch-all for other unexpected bytes in IDLE, maybe reset or log
                     default:
-                        response = 0x00; // Safe default
-                        // Log unknown bytes for debugging - but handle some common ones
-                        if (received_byte >= 0x80 && received_byte <= 0xFF) {
-                            // High bytes often indicate advanced trading protocol
-                            response = received_byte; // Echo back
-                            char advanced_msg[64];
-                            snprintf(advanced_msg, sizeof(advanced_msg), "Advanced protocol: 0x%02X", received_byte);
-                            pokemon_log_trade_event("PROTOCOL", advanced_msg);
-                        } else if (received_byte >= 0x01 && received_byte <= 0x06) {
-                            // Pokemon selection commands - always trade our first Pokemon
-                            response = 0x02; // We always offer Pokemon #2
-                            current_session.state = TRADE_STATE_CONNECTED;
-                            char sel_msg_buf[128]; // Buffer for state log
-                            snprintf(sel_msg_buf, sizeof(sel_msg_buf), "IDLE → CONNECTED (partner sel 0x%02X default)", received_byte);
-                            pokemon_log_trade_event("STATE", sel_msg_buf);
-                            snprintf(sel_msg_buf, sizeof(sel_msg_buf), "Partner selected Pokemon #%d, offering our Pokemon #2 - transitioning to connected", received_byte);
-                            pokemon_log_trade_event("SELECTION", sel_msg_buf);
-                            save_sequence_count = 0;
-                        } else {
-                            char unknown_msg[64];
-                            snprintf(unknown_msg, sizeof(unknown_msg), "Unknown byte in IDLE: 0x%02X", received_byte);
-                            pokemon_log_trade_event("DEBUG", unknown_msg);
-                        }
+                        response = PKMN_BLANK; // Safe default, Flipper might send PKMN_BREAK_LINK
+                        char unknown_idle_msg[64];
+                        snprintf(unknown_idle_msg, sizeof(unknown_idle_msg), "IDLE: RX:0x%02X -> TX:0x%02X (Unexpected)", received_byte, response);
+                        pokemon_log_trade_event("DEBUG", unknown_idle_msg);
+                        // Consider resetting to CONN_FALSE like Flipper if connection seems broken
+                        // For now, just echo blank and stay IDLE or let save_sequence_count manage transition.
                         break;
                 }
                 
@@ -401,459 +323,278 @@ void pokemon_trading_update(void) {
                 pokemon_send_trade_response(response);
                 
                 char msg[64];
-                snprintf(msg, sizeof(msg), "RX: 0x%02X → TX: 0x%02X (save_seq: %d)", 
+                snprintf(msg, sizeof(msg), "IDLE RX: 0x%02X -> TX: 0x%02X (save_seq: %d)", 
                         received_byte, response, save_sequence_count);
                 pokemon_log_trade_event("PROTOCOL", msg);
-                
-                // Broadcast real-time WebSocket update
                 websocket_broadcast_protocol_data(received_byte, response, "IDLE");
             }
             break;
             
-        case TRADE_STATE_WAITING_FOR_PARTNER:
-            // Continue Pokemon trading handshake after save
+        case TRADE_STATE_WAITING_FOR_PARTNER: // Equivalent to Flipper's GAMEBOY_CONN_TRUE (menu navigation)
             if (data_available) {
-                uint8_t response = 0x00; // Default response
-                static int partner_wait_count = 0;
-                
-                // Handle continued trading protocol
-                switch (received_byte) {
-                    case 0x01: // Continue sync
-                        response = 0x01; 
-                        partner_wait_count++;
-                        if (partner_wait_count > 3) {
-                            current_session.state = TRADE_STATE_CONNECTED;
-                            pokemon_log_trade_event("STATE", "WAITING_PARTNER → CONNECTED (sync >3)");
-                            pokemon_log_trade_event("CABLE", "Partner detected, ready to trade");
-                        }
-                        break;
-                    case 0x06: // Room confirmation
-                        response = 0x06; // Echo confirmation
-                        pokemon_log_trade_event("MENU", "Room entry confirmed (waiting for partner)");
-                        break;
-                    case 0x02: // Trade request
-                        response = 0x02;
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("STATE", "WAITING_PARTNER → CONNECTED (trade req)");
-                        pokemon_log_trade_event("TRADE", "Trade request accepted");
-                        break;
-                    case 0x03: // Status check (partner detection)
-                        response = 0x00; // Ready
-                        partner_wait_count++;
-                        break;
-                    case 0x00: // Continue/padding
-                        response = 0x00;
-                        partner_wait_count++;
-                        // Simulate finding a trading partner after enough exchanges
-                        if (partner_wait_count > 5) { 
-                            // Send a different response to indicate partner found
-                            response = 0x01;
-                            current_session.state = TRADE_STATE_CONNECTED; // Transition to connected
-                            pokemon_log_trade_event("STATE", "WAITING_PARTNER → CONNECTED (sim partner)");
-                            pokemon_log_trade_event("CABLE", "Simulating partner detection, transitioning to connected");
-                        }
-                        break;
-                    case 0x1C: // Menu navigation/selection 
-                        response = 0x1C; // Echo selection
-                        pokemon_log_trade_event("MENU", "Menu navigation");
-                        break;
-                    case 0x60: // Cable Club menu selection (Trade Center)
-                        response = 0x60; // Echo menu selection
-                        pokemon_log_trade_event("MENU", "Trade Center selected");
-                        break;
-                    case 0x61: // Cable Club menu selection (Colosseum)
-                        response = 0x61; // Echo menu selection
-                        pokemon_log_trade_event("MENU", "Colosseum selected");
-                        break;
-                    case 0x62: // Additional menu option or Pokemon selection continuation
-                        response = 0x62; // Echo selection
-                        current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
-                        pokemon_log_trade_event("STATE", "WAITING_PARTNER → WAITING_PARTNER (menu 0x62)");
-                        pokemon_log_trade_event("MENU", "Menu option 0x62 selected - entering partner wait");
-                        break;
-                    case 0x63: case 0x64: case 0x65: case 0x66: case 0x67: case 0x68: case 0x69:
-                    case 0x6A: case 0x6B: case 0x6C: case 0x6D: case 0x6E:
-                        // Menu selection options (0x63-0x6E from possible_indexes range)
-                        response = received_byte; // Echo selection
-                        current_session.state = TRADE_STATE_WAITING_FOR_PARTNER;
-                        char partner_menu_msg_buf[128];
-                        snprintf(partner_menu_msg_buf, sizeof(partner_menu_msg_buf), "WAITING_PARTNER → WAITING_PARTNER (partner menu 0x%02X)", received_byte);
-                        pokemon_log_trade_event("STATE", partner_menu_msg_buf);
-                        snprintf(partner_menu_msg_buf, sizeof(partner_menu_msg_buf), "Partner menu selection 0x%02X", received_byte);
-                        pokemon_log_trade_event("MENU", partner_menu_msg_buf);
-                        break;
-                    case 0x6F: // Stop/cancel trade
-                        response = 0x6F; // Echo stop
-                        current_session.state = TRADE_STATE_IDLE;
-                        pokemon_log_trade_event("STATE", "WAITING_PARTNER → IDLE (stop/cancel 0x6F)");
-                        pokemon_log_trade_event("TRADE", "Trade stopped/cancelled by partner (0x6F)");
-                        break;
-                    case 0xD0: case 0xD1: case 0xD2: case 0xD3: case 0xD4:
-                        // Room states from enter_room_states specification
-                        response = received_byte; // Echo room state
-                        char partner_room_msg[64];
-                        snprintf(partner_room_msg, sizeof(partner_room_msg), "Partner room state 0x%02X", received_byte);
-                        pokemon_log_trade_event("ROOM", partner_room_msg);
-                        break;
-                    case 0xFE: // No input signal
-                        response = 0x00; // Continue/ready
-                        pokemon_log_trade_event("PROTOCOL", "No input signal (0xFE) in partner wait - sending continue");
-                        break;
-                    case 0x70: // Trading protocol start
-                        response = 0x70; // Acknowledge
-                        pokemon_log_trade_event("TRADE", "Trading protocol initiated");
-                        break;
-                    case 0x71: // Trading handshake
-                        response = 0x71; // Echo handshake
-                        pokemon_log_trade_event("TRADE", "Trading handshake");
-                        break;
-                    case 0x72: // Trading ready
-                        response = 0x72; // Ready
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("STATE", "WAITING_PARTNER → CONNECTED (ready 0x72)");
-                        pokemon_log_trade_event("TRADE", "Both sides ready to trade");
-                        break;
-                    case 0x7F: // Trading cancel/abort
-                        response = 0x7F; // Acknowledge cancel
-                        current_session.state = TRADE_STATE_IDLE;
-                        pokemon_log_trade_event("STATE", "WAITING_PARTNER → IDLE (cancel 0x7F)");
-                        pokemon_log_trade_event("TRADE", "Trading cancelled");
-                        break;
-                    case 0xC0: // Enter trading room / Both players ready
-                        response = 0xC0; // Echo confirmation
-                        current_session.state = TRADE_STATE_CONNECTED;
-                        pokemon_log_trade_event("STATE", "WAITING_PARTNER → CONNECTED (room 0xC0)");
-                        pokemon_log_trade_event("TRADE", "Trading room entered - both players ready!");
-                        break;
-                    case 0xFD: // Start data transmission
-                        response = 0xFD;
-                        current_session.state = TRADE_STATE_RECEIVING_POKEMON;
-                        break;
-                    default:
-                        response = 0x00;
-                        // Log unknown bytes for debugging
-                        char unknown_msg[64];
-                        snprintf(unknown_msg, sizeof(unknown_msg), "Unknown byte: 0x%02X", received_byte);
-                        pokemon_log_trade_event("DEBUG", unknown_msg);
-                        break;
-                }
-                
-                pokemon_send_trade_response(response);
-                
-                char msg[64];
-                snprintf(msg, sizeof(msg), "RX: 0x%02X → TX: 0x%02X (wait: %d)", 
-                        received_byte, response, partner_wait_count);
-                pokemon_log_trade_event("PARTNER", msg);
-            }
-            break;
-            
-        case TRADE_STATE_CONNECTED:
-            // Enhanced Pokemon selection and trading preparation
-            if (data_available) {
-                uint8_t response = 0x00;
-                
-                switch (received_byte) {
-                    case 0x00: // Continue/ready
-                        response = 0x00;
-                        pokemon_log_trade_event("TRADE", "Both sides ready for Pokemon selection");
-                        break;
-                    case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06:
-                        // Pokemon party selection (1-6)
-                        response = 0x02; // We'll always offer Pokemon #2 from our storage
-                        char selection_msg[64];
-                        snprintf(selection_msg, sizeof(selection_msg), "Partner selected Pokemon #%d, offering our Pokemon #2", received_byte);
-                        pokemon_log_trade_event("SELECTION", selection_msg);
-                        break;
-                    case 0x62: // Accept trade command - proceed to data exchange
-                        response = 0x62; // Echo acceptance
-                        current_session.state = TRADE_STATE_RECEIVING_POKEMON;
-                        pokemon_log_trade_event("STATE", "CONNECTED → RX_POKEMON (accept 0x62)");
-                        pokemon_log_trade_event("TRADE", "Trade accepted (0x62) in connected state - starting data exchange");
-                        websocket_broadcast_trade_event("TRADE", "Trade accepted - starting data exchange");
-                        break;
-                    case 0x63: case 0x64: case 0x65: case 0x66: case 0x67: case 0x68: case 0x69:
-                    case 0x6A: case 0x6B: case 0x6C: case 0x6D: case 0x6E:
-                        // Menu selection options during connected state
-                        response = received_byte; // Echo selection
-                        char connected_menu_msg[64];
-                        snprintf(connected_menu_msg, sizeof(connected_menu_msg), "Connected menu selection 0x%02X", received_byte);
-                        pokemon_log_trade_event("SELECTION", connected_menu_msg);
-                        break;
-                    case 0x6F: // Stop/cancel trade
-                        response = 0x6F; // Echo stop
-                        current_session.state = TRADE_STATE_IDLE;
-                        pokemon_log_trade_event("STATE", "CONNECTED → IDLE (stop/cancel 0x6F)");
-                        pokemon_log_trade_event("TRADE", "Trade stopped/cancelled by partner (0x6F) in connected state");
-                        websocket_broadcast_trade_event("TRADE", "Trade cancelled by partner");
-                        break;
-                    case 0xFE: // No input signal
-                        response = 0x00; // Continue/ready
-                        pokemon_log_trade_event("PROTOCOL", "No input signal (0xFE) in connected state - sending continue");
-                        break;
-                    case 0x7C: // Trade ready confirmation
-                        response = 0x7C;
-                        current_session.state = TRADE_STATE_RECEIVING_POKEMON;
-                        pokemon_log_trade_event("STATE", "CONNECTED → RX_POKEMON (confirm 0x7C)");
-                        pokemon_log_trade_event("TRADE", "Trade confirmation exchanged, starting data transfer");
-                        websocket_broadcast_trade_event("TRADE", "Trade confirmation exchanged, starting data transfer");
-                        break;
-                    case 0x7F: // Cancel trade
-                        response = 0x7F;
-                        current_session.state = TRADE_STATE_IDLE;
-                        pokemon_log_trade_event("STATE", "CONNECTED → IDLE (cancel 0x7F)");
-                        pokemon_log_trade_event("TRADE", "Trade cancelled by partner");
-                        websocket_broadcast_trade_event("TRADE", "Trade cancelled by partner");
-                        break;
-                    case 0xFD: // Start Pokemon data transmission
-                        response = 0xFD;
-                        current_session.state = TRADE_STATE_RECEIVING_POKEMON;
-                        pokemon_log_trade_event("STATE", "CONNECTED → RX_POKEMON (preamble 0xFD)");
-                        pokemon_log_trade_event("TRADE", "Pokemon data transmission starting");
-                        websocket_broadcast_trade_event("TRADE", "Pokemon data transmission starting");
-                        break;
-                    default:
-                        char debug_msg[128]; // Increased buffer size
-                        if (received_byte == 0x91) { // Seen from P2 (GameBoy)
-                            response = 0x93; // Respond as P1
-                            snprintf(debug_msg, sizeof(debug_msg), "Connected state RX: 0x%02X → TX: 0x%02X (Map Header Swap)", received_byte, response);
-                        } else if (received_byte == 0x93) { // Seen from P1 (GameBoy)
-                            response = 0x91; // Respond as P2
-                            snprintf(debug_msg, sizeof(debug_msg), "Connected state RX: 0x%02X → TX: 0x%02X (Map Header Swap)", received_byte, response);
-                        } else if (received_byte >= 0x80 && received_byte < 0x90) { // Likely map data bytes
-                            response = 0x00; // Send ACK/continue instead of echo
-                            snprintf(debug_msg, sizeof(debug_msg), "Connected state RX: 0x%02X → TX: 0x%02X (Map Data Ack)", received_byte, response);
-                        } else {
-                            response = received_byte; // Echo other unknown bytes
-                            snprintf(debug_msg, sizeof(debug_msg), "Connected state RX: 0x%02X → TX: 0x%02X (Default Echo)", received_byte, response);
-                        }
-                        pokemon_log_trade_event("DEBUG", debug_msg);
-                        break;
-                }
-                
-                pokemon_send_trade_response(response);
-            }
-            break;
-            
-        case TRADE_STATE_RECEIVING_POKEMON:
-            // Static variables for the receiving process
-            static uint8_t imidazole_receive_buffer[POKEMON_DATA_SIZE + POKEMON_NAME_LENGTH + POKEMON_OT_NAME_LENGTH];
-            static size_t imidazole_received_bytes = 0;
-            static bool imidazole_receiving_pokemon_data = false;
-            static bool imidazole_receiving_nickname = false;
-            static bool imidazole_receiving_ot_name = false;
-            
-            if (data_available) {
-                char xfer_log_buffer[128];
-                uint8_t byte_to_transmit = received_byte; // Default: echo received byte as ack
+                uint8_t response = received_byte; // Default: echo most bytes in this state
 
-                // Initialize receiving sequence if not already started
-                if (!imidazole_receiving_pokemon_data && !imidazole_receiving_nickname && !imidazole_receiving_ot_name) {
-                    if (received_byte == 0xFD) { // Preamble for Pokemon data
-                        pokemon_log_trade_event("RECV_INIT", "Preamble 0xFD received, starting Pokemon reception.");
-                        imidazole_receiving_pokemon_data = true;
-                        imidazole_received_bytes = 0;
-                        // byte_to_transmit = 0xFD; // Echo preamble - already default
-                    } else {
-                        // If not a preamble, it might be an error or unexpected byte.
-                        // For now, we just echo and log.
-                        snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "RECV: RX:0x%02X -> TX:0x%02X (Unexpected initial byte, echoing)", received_byte, byte_to_transmit);
-                        pokemon_log_trade_event("DEBUG", xfer_log_buffer);
-                        pokemon_send_trade_response(byte_to_transmit);
-                        return; // Or handle error state
-                    }
-                }
+                switch (received_byte) {
+                    case PKMN_MASTER: // 0x01: Unexpected master signal if already connected
+                        response = PKMN_SLAVE; // Re-assert slave role
+                        current_session.state = TRADE_STATE_IDLE; // Reset to initial connection state
+                        pokemon_log_trade_event("STATE", "WAITING_PARTNER -> IDLE (Unexpected Master Signal)");
+                        break;
 
-                if (imidazole_receiving_pokemon_data) {
-                    imidazole_receive_buffer[imidazole_received_bytes++] = received_byte;
-                    snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "RECV: RX:0x%02X -> TX:0x%02X (Core byte %zu/%d)", received_byte, byte_to_transmit, imidazole_received_bytes, POKEMON_DATA_SIZE);
+                    case PKMN_BLANK: // 0x00
+                        response = PKMN_BLANK;
+                        break;
+
+                    case PKMN_CONNECTED: // 0x60, can be part of menu loop
+                        response = PKMN_CONNECTED; // Echo
+                        break;
                     
-                    if (imidazole_received_bytes >= POKEMON_DATA_SIZE) {
-                        pokemon_log_trade_event("RECV_CORE_DONE", "Incoming core data received.");
-                        imidazole_receiving_pokemon_data = false;
-                        imidazole_receiving_nickname = true;
-                        imidazole_received_bytes = 0;
-                    }
-                } else if (imidazole_receiving_nickname) {
-                    imidazole_receive_buffer[POKEMON_DATA_SIZE + imidazole_received_bytes++] = received_byte;
-                    snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "RECV: RX:0x%02X -> TX:0x%02X (Nickname byte %zu/%d)", received_byte, byte_to_transmit, imidazole_received_bytes, POKEMON_NAME_LENGTH);
+                    // Menu Highlighted (echo)
+                    case PKMN_MENU_TRADE_CENTRE_HIGHLIGHTED: // 0xD0
+                    case PKMN_MENU_COLOSSEUM_HIGHLIGHTED:    // 0xD1
+                    case PKMN_MENU_CANCEL_HIGHLIGHTED:       // 0xD2
+                        response = received_byte; // Echo highlight
+                        pokemon_log_trade_event("MENU", "Menu item highlighted");
+                        break;
 
-                    if (imidazole_received_bytes >= POKEMON_NAME_LENGTH) {
-                        pokemon_log_trade_event("RECV_NICK_DONE", "Incoming nickname received.");
-                        imidazole_receiving_nickname = false;
-                        imidazole_receiving_ot_name = true;
-                        imidazole_received_bytes = 0;
-                    }
-                } else if (imidazole_receiving_ot_name) {
-                    imidazole_receive_buffer[POKEMON_DATA_SIZE + POKEMON_NAME_LENGTH + imidazole_received_bytes++] = received_byte;
-                    snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "RECV: RX:0x%02X -> TX:0x%02X (OT Name byte %zu/%d)", received_byte, byte_to_transmit, imidazole_received_bytes, POKEMON_OT_NAME_LENGTH);
+                    // Menu Selected
+                    case PKMN_MENU_TRADE_CENTRE_SELECTED: // 0xD4: Trade Center selected
+                        response = PKMN_BLANK; // Flipper responds with BLANK here and changes state
+                        current_session.state = TRADE_STATE_CONNECTED; // Our "Ready for preamble" state
+                        pokemon_log_trade_event("STATE", "WAITING_PARTNER -> CONNECTED (Trade Center Selected)");
+                        pokemon_log_trade_event("MENU", "Trade Center selected, ready for trade data preamble.");
+                        break;
+                    case PKMN_MENU_COLOSSEUM_SELECTED: // 0xD5: Colosseum selected
+                        response = PKMN_BLANK; // Flipper responds with BLANK
+                        // We don't implement Colosseum, so perhaps go back to IDLE or log an error.
+                        // For now, mimic Flipper's state change to a "Colosseum" mode if we had one, or just log.
+                        pokemon_log_trade_event("MENU", "Colosseum selected (not implemented), echoing blank.");
+                        // current_session.state = TRADE_STATE_IDLE; // Or a specific Colosseum state
+                        break;
+                    case PKMN_MENU_CANCEL_SELECTED: // 0xD6: Cancel selected from Cable Club menu
+                        response = received_byte; // Echo, Flipper uses PKMN_BREAK_LINK
+                        current_session.state = TRADE_STATE_IDLE;
+                        pokemon_log_trade_event("STATE", "WAITING_PARTNER -> IDLE (Cancel Selected)");
+                        pokemon_log_trade_event("MENU", "Cancel selected from Cable Club menu.");
+                        break;
+                    
+                    case 0x6F: // PKMN_TABLE_LEAVE_GEN_I (Flipper constant) - User backs out of trade screen
+                        response = received_byte; // Echo
+                        current_session.state = TRADE_STATE_IDLE; // Or WAITING_FOR_PARTNER if still in club
+                        pokemon_log_trade_event("STATE", "WAITING_PARTNER -> IDLE (Partner left table 0x6F)");
+                        break;
 
-                    if (imidazole_received_bytes >= POKEMON_OT_NAME_LENGTH) {
-                        pokemon_log_trade_event("RECV_OT_DONE", "Incoming OT name received.");
+                    // Bytes that might indicate start of actual trade data sequence (preamble)
+                    // Flipper's getTradeCentreResponse handles this after GAMEBOY_READY state.
+                    // If we receive 0xFD here, it means Trade Center was selected implicitly or via a different byte.
+                    case SERIAL_PREAMBLE_BYTE: // 0xFD - Flipper constant for this
+                        response = SERIAL_PREAMBLE_BYTE; // Echo preamble
+                        current_session.state = TRADE_STATE_CONNECTED; // Ensure we are in the state to receive the block
+                        pokemon_log_trade_event("STATE", "WAITING_PARTNER -> CONNECTED (Preamble 0xFD received)");
+                        // The TRADE_STATE_CONNECTED should then handle the preamble sequence.
+                        return; 
                         
-                        // Copy the core Pokemon data (44 bytes) to the core structure
-                        memcpy(&current_session.incoming_pokemon.core, imidazole_receive_buffer, POKEMON_DATA_SIZE);
-                        
-                        // Copy nickname and OT name separately
-                        memcpy(current_session.incoming_pokemon.nickname, imidazole_receive_buffer + POKEMON_DATA_SIZE, POKEMON_NAME_LENGTH);
-                        current_session.incoming_pokemon.nickname[POKEMON_NAME_LENGTH-1] = '\0'; // Ensure null termination
-                        memcpy(current_session.incoming_pokemon.ot_name, imidazole_receive_buffer + POKEMON_DATA_SIZE + POKEMON_NAME_LENGTH, POKEMON_OT_NAME_LENGTH);
-                        current_session.incoming_pokemon.ot_name[POKEMON_OT_NAME_LENGTH-1] = '\0'; // Ensure null termination
-                        
-                        current_session.has_incoming_data = true;
-                        imidazole_receiving_ot_name = false;
-                        imidazole_received_bytes = 0; // Reset for next potential reception
-                        
-                        char trade_msg[128];
-                        snprintf(trade_msg, sizeof(trade_msg), "Complete Pokemon received: %s (Lv.%d) from %s (Trainer ID: 0x%04X)", 
-                                pokemon_get_species_name(current_session.incoming_pokemon.core.species),
-                                current_session.incoming_pokemon.core.level,
-                                current_session.incoming_pokemon.ot_name,
-                                current_session.incoming_pokemon.core.original_trainer_id);
-                        pokemon_log_trade_event("TRADE", trade_msg);
-
-                        if (pokemon_validate_data(&current_session.incoming_pokemon)) {
-                            pokemon_log_trade_event("VALIDATION", "Incoming Pokemon data is valid.");
-                            // Successfully received a Pokemon. Now it might be our turn to send,
-                            // or go to confirmation if we've already sent ours.
-                            // For a simple sequential trade: GB sends -> Pico sends -> Confirm
-                            // We'll transition to SENDING_POKEMON if we have one prepared by pokemon_send_stored.
-                            if (current_session.outgoing_pokemon.core.species != 0) { // Check if there's an outgoing Pokemon
-                                current_session.state = TRADE_STATE_SENDING_POKEMON;
-                                current_session.needs_internal_reset = true; // Initialize sender
-                                pokemon_log_trade_event("STATE", "RX_POKEMON -> SENDING_POKEMON (Got theirs, now send ours)");
-                                // The byte_to_transmit here is the ack for the last byte of THEIR Pokemon.
-                                // The SENDING_POKEMON state will handle sending the first byte of OUR Pokemon.
-                            } else {
-                                // No Pokemon queued to send from our side, this might be an issue
-                                // or we are in a different trade mode (e.g. receive only).
-                                // For now, go to confirm as if we didn't need to send.
-                                pokemon_log_trade_event("WARNING", "No outgoing Pokemon, proceeding to confirm.");
-                                current_session.state = TRADE_STATE_CONFIRMING;
-                                pokemon_log_trade_event("STATE", "RX_POKEMON -> CONFIRMING (No outgoing Pokemon)");
-                            }
-                        } else {
-                            pokemon_log_trade_event("VALIDATION", "Incoming Pokemon data INVALID.");
-                            current_session.state = TRADE_STATE_ERROR;
-                            strcpy(last_error, "Invalid Pokemon data received from partner");
-                            pokemon_log_trade_event("STATE", "RX_POKEMON -> ERROR (Invalid data)");
-                            byte_to_transmit = TRADE_CANCEL_BYTE; // Signal error to partner
-                        }
-                    }
+                    default:
+                        // For other bytes not explicitly handled, echo them.
+                        // This covers other menu navigation or status bytes.
+                        // pokemon_log_trade_event("DEBUG", "WAITING_PARTNER: Default echo.");
+                        break;
                 }
-                pokemon_send_trade_response(byte_to_transmit);
-                pokemon_log_trade_event("DETAIL", xfer_log_buffer);
+                
+                pokemon_send_trade_response(response);
+                
+                char partner_msg[64];
+                snprintf(partner_msg, sizeof(partner_msg), "WAIT_PARTNER RX: 0x%02X -> TX: 0x%02X", 
+                        received_byte, response);
+                pokemon_log_trade_event("PROTOCOL", partner_msg);
+                websocket_broadcast_protocol_data(received_byte, response, "WAITING_FOR_PARTNER");
             }
             break;
             
-        case TRADE_STATE_SENDING_POKEMON:
-            // Static variables for the sending process
-            static size_t outgoing_data_sent_bytes = 0;
-            static bool sending_outgoing_pokemon_core_data = false;
-            static bool sending_outgoing_pokemon_nickname = false;
-            static bool sending_outgoing_pokemon_ot_name = false;
+        case TRADE_STATE_CONNECTED: // Was: Equivalent to Flipper's GAMEBOY_READY (expecting trade data preamble 0xFD)
+                                    // Now: Manages the full preamble, random numbers, and final preamble sequence.
+            if (current_session.trade_exchange_sub_state == TRADE_SUBSTATE_NONE) {
+                // First time entering this state after Trade Center selection or receiving 0xFD in WAITING_FOR_PARTNER.
+                // The response to the byte that caused transition (e.g. PKMN_BLANK for 0xD4, or 0xFD for 0xFD) 
+                // was already sent by the previous state (IDLE or WAITING_FOR_PARTNER).
+                // We are now setting up to expect the first 0xFD of the preamble sequence if not already received,
+                // or to continue the preamble if 0xFD was the trigger.
+                
+                pokemon_log_trade_event("DEBUG", "TRADE_STATE_CONNECTED: Initializing sub-state.");
 
-            if (current_session.needs_internal_reset) {
-                pokemon_log_trade_event("SEND_INIT", "Initializing sending process.");
-                sending_outgoing_pokemon_core_data = true;
-                sending_outgoing_pokemon_nickname = false;
-                sending_outgoing_pokemon_ot_name = false;
-                outgoing_data_sent_bytes = 0;
-                current_session.needs_internal_reset = false;
-                // We might need to send an initial byte to kick things off or wait for GB
-                // For now, assume GB sends a byte we reply to.
-            }
-
-            if (data_available) {
-                uint8_t byte_to_transmit = 0x00; // Default byte to send (e.g., padding or error)
-                char xfer_log_buffer[128];
-
-                if (sending_outgoing_pokemon_core_data) {
-                    if (outgoing_data_sent_bytes < POKEMON_DATA_SIZE) {
-                        // Send core Pokemon data (44 bytes) from the .core structure
-                        byte_to_transmit = ((uint8_t*)&current_session.outgoing_pokemon.core)[outgoing_data_sent_bytes];
-                        snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "SEND: TX:0x%02X (Core byte %zu/%d) / RX:0x%02X", byte_to_transmit, outgoing_data_sent_bytes + 1, POKEMON_DATA_SIZE, received_byte);
-                        outgoing_data_sent_bytes++;
-                    } else {
-                        pokemon_log_trade_event("SEND_CORE_DONE", "Core data sent.");
-                        sending_outgoing_pokemon_core_data = false;
-                        sending_outgoing_pokemon_nickname = true;
-                        outgoing_data_sent_bytes = 0;
-                        // Send first nickname byte immediately
-                        if (outgoing_data_sent_bytes < POKEMON_NAME_LENGTH) {
-                             byte_to_transmit = (uint8_t)current_session.outgoing_pokemon.nickname[outgoing_data_sent_bytes];
-                             snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "SEND: TX:0x%02X (Nickname byte %zu/%d) / RX:0x%02X", byte_to_transmit, outgoing_data_sent_bytes + 1, POKEMON_NAME_LENGTH, received_byte);
-                             outgoing_data_sent_bytes++;
-                        } else { // Empty nickname, should not happen if POKEMON_NAME_LENGTH > 0 but handle just in case
-                            pokemon_log_trade_event("SEND_NICK_DONE", "Nickname (empty) sent.");
-                            sending_outgoing_pokemon_nickname = false;
-                            sending_outgoing_pokemon_ot_name = true;
-                            outgoing_data_sent_bytes = 0;
-                            // Send first OT byte
-                            if (outgoing_data_sent_bytes < POKEMON_OT_NAME_LENGTH) {
-                                byte_to_transmit = (uint8_t)current_session.outgoing_pokemon.ot_name[outgoing_data_sent_bytes];
-                                snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "SEND: TX:0x%02X (OT Name byte %zu/%d) / RX:0x%02X", byte_to_transmit, outgoing_data_sent_bytes + 1, POKEMON_OT_NAME_LENGTH, received_byte);
-                                outgoing_data_sent_bytes++;
-                            } else {
-                                // This means all parts are zero length, highly unlikely
-                                pokemon_log_trade_event("SEND_ALL_DONE", "All parts sent (zero length).");
-                                current_session.state = TRADE_STATE_CONFIRMING;
-                                pokemon_log_trade_event("STATE", "SENDING_POKEMON -> CONFIRMING");
-                                byte_to_transmit = TRADE_ACK_BYTE; // Or some other completion signal
-                            }
-                        }
-                    }
-                } else if (sending_outgoing_pokemon_nickname) {
-                    if (outgoing_data_sent_bytes < POKEMON_NAME_LENGTH) {
-                        byte_to_transmit = (uint8_t)current_session.outgoing_pokemon.nickname[outgoing_data_sent_bytes];
-                        snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "SEND: TX:0x%02X (Nickname byte %zu/%d) / RX:0x%02X", byte_to_transmit, outgoing_data_sent_bytes + 1, POKEMON_NAME_LENGTH, received_byte);
-                        outgoing_data_sent_bytes++;
-                    } else {
-                        pokemon_log_trade_event("SEND_NICK_DONE", "Nickname sent.");
-                        sending_outgoing_pokemon_nickname = false;
-                        sending_outgoing_pokemon_ot_name = true;
-                        outgoing_data_sent_bytes = 0;
-                        // Send first OT byte immediately
-                        if (outgoing_data_sent_bytes < POKEMON_OT_NAME_LENGTH) {
-                            byte_to_transmit = (uint8_t)current_session.outgoing_pokemon.ot_name[outgoing_data_sent_bytes];
-                            snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "SEND: TX:0x%02X (OT Name byte %zu/%d) / RX:0x%02X", byte_to_transmit, outgoing_data_sent_bytes + 1, POKEMON_OT_NAME_LENGTH, received_byte);
-                            outgoing_data_sent_bytes++;
-                        } else {
-                             pokemon_log_trade_event("SEND_OT_DONE", "OT Name (empty) sent.");
-                             sending_outgoing_pokemon_ot_name = false;
-                             pokemon_log_trade_event("SEND_ALL_DONE", "All Pokemon data sent.");
-                             current_session.state = TRADE_STATE_CONFIRMING;
-                             pokemon_log_trade_event("STATE", "SENDING_POKEMON -> CONFIRMING");
-                             byte_to_transmit = TRADE_ACK_BYTE; // Signal completion of sending our Pokemon
-                        }
-                    }
-                } else if (sending_outgoing_pokemon_ot_name) {
-                    if (outgoing_data_sent_bytes < POKEMON_OT_NAME_LENGTH) {
-                        byte_to_transmit = (uint8_t)current_session.outgoing_pokemon.ot_name[outgoing_data_sent_bytes];
-                        snprintf(xfer_log_buffer, sizeof(xfer_log_buffer), "SEND: TX:0x%02X (OT Name byte %zu/%d) / RX:0x%02X", byte_to_transmit, outgoing_data_sent_bytes + 1, POKEMON_OT_NAME_LENGTH, received_byte);
-                        outgoing_data_sent_bytes++;
-                    } else {
-                        pokemon_log_trade_event("SEND_OT_DONE", "OT Name sent.");
-                        sending_outgoing_pokemon_ot_name = false;
-                        pokemon_log_trade_event("SEND_ALL_DONE", "All Pokemon data sent.");
-                        current_session.state = TRADE_STATE_CONFIRMING;
-                        pokemon_log_trade_event("STATE", "SENDING_POKEMON -> CONFIRMING");
-                        byte_to_transmit = TRADE_ACK_BYTE; // Signal completion of sending our Pokemon
-                    }
+                // If we entered because of 0xFD from WAITING_FOR_PARTNER, that 0xFD is the first preamble byte.
+                // The `data_available` and `received_byte` in the outer scope are from the current processing cycle.
+                // If pokemon_trading_update was called and linkcable_receive() got 0xFD, and that led to this state transition
+                // and this block of code, then `received_byte` *is* 0xFD.
+                if (data_available && received_byte == SERIAL_PREAMBLE_BYTE) {
+                    current_session.trade_exchange_sub_state = TRADE_SUBSTATE_INITIAL_PREAMBLE;
+                    current_session.exchange_counter = 1; // Count this 0xFD
+                    pokemon_log_trade_event("SUBSTATE", "CONNECTED -> INITIAL_PREAMBLE (0xFD from WAITING_FOR_PARTNER is 1st byte)");
+                    pokemon_send_trade_response(SERIAL_PREAMBLE_BYTE); // Echo the 0xFD
+                    // We have processed the 0xFD that triggered the state change. We should wait for the next byte.
+                    return; 
                 } else {
-                    // Should not be in this state if not sending any part, but log and recover.
-                    pokemon_log_trade_event("ERROR", "SENDING_POKEMON state without active send part. Resetting.");
-                    current_session.state = TRADE_STATE_IDLE; // Reset to a safe state
-                    byte_to_transmit = TRADE_CANCEL_BYTE; // Signal an issue
+                    // If we entered from 0xD4 (Trade Center select) or other means, 
+                    // we are now expecting 0xFD as the *next* byte.
+                    current_session.trade_exchange_sub_state = TRADE_SUBSTATE_INITIAL_PREAMBLE;
+                    current_session.exchange_counter = 0;
+                    pokemon_log_trade_event("SUBSTATE", "CONNECTED -> INITIAL_PREAMBLE (Awaiting first 0xFD)");
+                    // No response sent here; the response to 0xD4 (PKMN_BLANK) was handled by IDLE state.
+                    // We must wait for a new byte.
+                    return; 
                 }
-                pokemon_send_trade_response(byte_to_transmit);
-                pokemon_log_trade_event("DETAIL", xfer_log_buffer);
-            } else {
-                 // If no data from Game Boy, what should we do? 
-                 // The link cable protocol is typically master/slave or relies on specific timing.
-                 // For now, we assume the Game Boy will send bytes to clock out our data.
-                 // If we initiated the send, we might need to send a Preamble (e.g. 0xFD) 
-                 // and then the data if the GB doesn't send anything after a timeout.
-                 // This part of the protocol needs to be robust.
+            }
+            
+            if (data_available) { // This will now process a *new* byte after the returns above
+                uint8_t response = received_byte; // Default: echo byte
+
+                switch (current_session.trade_exchange_sub_state) {
+                    case TRADE_SUBSTATE_INITIAL_PREAMBLE:
+                        if (received_byte == SERIAL_PREAMBLE_BYTE) {
+                            current_session.exchange_counter++;
+                            char log_msg[64];
+                            snprintf(log_msg, sizeof(log_msg), "Initial Preamble RX: 0x%02X (%zu/%d)", received_byte, current_session.exchange_counter, SERIAL_RNS_LENGTH);
+                            pokemon_log_trade_event("PROTOCOL_DETAIL", log_msg);
+
+                            if (current_session.exchange_counter >= SERIAL_RNS_LENGTH) {
+                                current_session.trade_exchange_sub_state = TRADE_SUBSTATE_RANDOM_NUMBERS;
+                                current_session.exchange_counter = 0;
+                                pokemon_log_trade_event("SUBSTATE", "INITIAL_PREAMBLE -> RANDOM_NUMBERS");
+                            }
+                        } else {
+                            // Unexpected byte during initial preamble
+                            pokemon_log_trade_event("ERROR", "Unexpected byte during initial preamble, resetting to IDLE");
+                            current_session.state = TRADE_STATE_IDLE;
+                            current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+                            response = PKMN_BLANK; // Or a cancel byte
+                        }
+                        break;
+
+                    case TRADE_SUBSTATE_RANDOM_NUMBERS:
+                        // GameBoy sends random numbers, Flipper echoes them.
+                        // These are followed by more preamble bytes.
+                        current_session.exchange_counter++;
+                        char log_msg_rn[64];
+                        snprintf(log_msg_rn, sizeof(log_msg_rn), "Random/Preamble2 RX: 0x%02X (%zu/%d)", received_byte, current_session.exchange_counter, SERIAL_RNS_LENGTH + SERIAL_TRADE_BLOCK_PREAMBLE_LENGTH);
+                        pokemon_log_trade_event("PROTOCOL_DETAIL", log_msg_rn);
+
+                        if (current_session.exchange_counter >= (SERIAL_RNS_LENGTH + SERIAL_TRADE_BLOCK_PREAMBLE_LENGTH)) {
+                            current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE; // Reset sub-state for next main state
+                            current_session.exchange_counter = 0;
+                            current_session.state = TRADE_STATE_EXCHANGING_BLOCKS; // Transition to actual block exchange
+                            // Initialize for block exchange
+                            current_session.incoming_pokemon_bytes_count = 0; // Need to add this to trade_session_t
+                            memset(&current_session.incoming_trade_block_buffer, 0, sizeof(trade_block_t)); // Need to add this
+                            pokemon_log_trade_event("STATE", "CONNECTED -> EXCHANGING_BLOCKS (Preamble/Randoms complete)");
+                        }
+                        break;
+
+                    // TRADE_SUBSTATE_FINAL_PREAMBLE is merged into RANDOM_NUMBERS count by Flipper logic
+                    
+                    default:
+                        pokemon_log_trade_event("ERROR", "Unknown trade_exchange_sub_state in CONNECTED state");
+                        current_session.state = TRADE_STATE_IDLE;
+                        current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+                        response = PKMN_BLANK;
+                        break;
+                }
+
+                // Handle cancellation specifically if it occurs during these sub-states
+                if (received_byte == PKMN_MENU_CANCEL_SELECTED) { 
+                    response = PKMN_MENU_CANCEL_SELECTED; // Echo
+                    current_session.state = TRADE_STATE_IDLE;
+                    current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+                    pokemon_log_trade_event("STATE", "CONNECTED -> IDLE (Cancel 0xD6 during preamble/random)");
+                }
+                
+                pokemon_send_trade_response(response);
+                char connected_log_msg[128]; // Increased buffer size for more detailed logging
+                snprintf(connected_log_msg, sizeof(connected_log_msg), "CONNECTED RX:0x%02X->TX:0x%02X (SubState:%d, Cnt:%zu)", 
+                        received_byte, response, current_session.trade_exchange_sub_state, current_session.exchange_counter);
+                pokemon_log_trade_event("PROTOCOL", connected_log_msg);
+                websocket_broadcast_protocol_data(received_byte, response, "CONNECTED");
+            }
+            break;
+            
+        case TRADE_STATE_EXCHANGING_BLOCKS: // New state to replace RECEIVING_POKEMON and SENDING_POKEMON byte-by-byte
+            if (data_available) {
+                uint8_t byte_to_send = PKMN_BLANK;
+                
+                // Store incoming byte
+                if (current_session.incoming_pokemon_bytes_count < sizeof(trade_block_t)) {
+                    ((uint8_t*)&current_session.incoming_trade_block_buffer)[current_session.incoming_pokemon_bytes_count] = received_byte;
+                }
+                
+                // Get byte to send from our pre-prepared g_trade_block_to_send
+                if (current_session.incoming_pokemon_bytes_count < sizeof(trade_block_t)) {
+                    byte_to_send = ((uint8_t*)&g_trade_block_to_send)[current_session.incoming_pokemon_bytes_count];
+                } else {
+                    // Should not happen if counts are managed correctly
+                    byte_to_send = PKMN_BLANK; 
+                }
+
+                pokemon_send_trade_response(byte_to_send);
+                
+                char exchange_log[128];
+                snprintf(exchange_log, sizeof(exchange_log), "EXCHANGE RX:0x%02X->TX:0x%02X (Byte %zu/%zu)", 
+                        received_byte, byte_to_send, current_session.incoming_pokemon_bytes_count + 1, sizeof(trade_block_t));
+                pokemon_log_trade_event("PROTOCOL_DETAIL", exchange_log);
+                websocket_broadcast_protocol_data(received_byte, byte_to_send, "EXCHANGING_BLOCKS");
+
+                current_session.incoming_pokemon_bytes_count++;
+
+                if (current_session.incoming_pokemon_bytes_count >= sizeof(trade_block_t)) {
+                    pokemon_log_trade_event("INFO", "Full trade block exchanged.");
+                    
+                    // Parse the received block
+                    memcpy(&current_session.incoming_pokemon.core, &current_session.incoming_trade_block_buffer.pokemon_data[0], sizeof(pokemon_core_data_t));
+                    
+                    // Byte swap received uint16_t fields from Big Endian (network) to Little Endian (RP2040)
+                    pokemon_core_data_t* core = &current_session.incoming_pokemon.core;
+                    core->current_hp = bswap16(core->current_hp);
+                    core->original_trainer_id = bswap16(core->original_trainer_id);
+                    core->hp_exp = bswap16(core->hp_exp); // Corrected field name
+                    core->attack_exp = bswap16(core->attack_exp); // Corrected field name
+                    core->defense_exp = bswap16(core->defense_exp); // Corrected field name
+                    core->speed_exp = bswap16(core->speed_exp); // Corrected field name
+                    core->special_exp = bswap16(core->special_exp); // Corrected field name
+                    core->max_hp = bswap16(core->max_hp);
+                    core->attack = bswap16(core->attack); // Corrected field name
+                    core->defense = bswap16(core->defense); // Corrected field name
+                    core->speed = bswap16(core->speed); // Corrected field name
+                    core->special = bswap16(core->special); // Corrected field name
+                    // IVs (iv_data[2]) are uint8_t arrays, already in correct byte order if sent correctly by GB.
+                    // Experience (experience[3]) is a uint8_t array, also fine.
+
+                    convert_pokemon_name_from_block(current_session.incoming_pokemon.nickname, current_session.incoming_trade_block_buffer.pokemon_nicknames[0], POKEMON_NAME_LENGTH);
+                    convert_pokemon_name_from_block(current_session.incoming_pokemon.ot_name, current_session.incoming_trade_block_buffer.original_trainer_names[0], POKEMON_OT_NAME_LENGTH);
+                    current_session.has_incoming_data = true;
+
+                    char parsed_msg[128];
+                    snprintf(parsed_msg, sizeof(parsed_msg), "Parsed incoming: %s (L%d) from %s", 
+                        current_session.incoming_pokemon.nickname, 
+                        current_session.incoming_pokemon.core.level, 
+                        current_session.incoming_pokemon.ot_name);
+                    pokemon_log_trade_event("TRADE", parsed_msg);
+
+                    if (pokemon_validate_data(&current_session.incoming_pokemon)) { // Basic validation
+                        pokemon_log_trade_event("VALIDATION", "Incoming Pokemon data appears valid (structurally).");
+                        current_session.state = TRADE_STATE_CONFIRMING; 
+                        pokemon_log_trade_event("STATE", "EXCHANGING_BLOCKS -> CONFIRMING");
+                        // What byte to send here? The Flipper logic moves to patch list or select phase.
+                        // After block exchange, the protocol usually moves to selecting which Pokemon (if party > 1)
+                        // or directly to confirmation. For a single Pokemon trade, it might be confirmation bytes.
+                        // For now, we will assume confirmation follows. The CONFIRMING state handles actual confirm bytes.
+                    } else {
+                        pokemon_log_trade_event("ERROR", "Incoming Pokemon data failed validation after exchange.");
+                        current_session.state = TRADE_STATE_ERROR;
+                        strcpy(last_error, "Invalid data in exchanged block");
+                    }
+                    // Reset for next potential full exchange or different process
+                    current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+                    current_session.exchange_counter = 0;
+                    current_session.incoming_pokemon_bytes_count = 0;
+                }
             }
             break;
             
@@ -928,7 +669,17 @@ void pokemon_trading_update(void) {
             // Trade completed, reset to idle
             current_session.state = TRADE_STATE_IDLE;
             pokemon_log_trade_event("STATE", "COMPLETE → IDLE (trade done)");
-            memset(&current_session, 0, sizeof(current_session));
+            // Reset more fields of current_session
+            memset(&current_session.incoming_pokemon, 0, sizeof(pokemon_data_t));
+            memset(&current_session.outgoing_pokemon, 0, sizeof(pokemon_data_t));
+            current_session.has_incoming_data = false;
+            current_session.trade_confirmed = false;
+            current_session.partner_name[0] = '\0';
+            current_session.needs_internal_reset = false;
+            current_session.our_block_sent_this_exchange = false;
+            current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+            current_session.exchange_counter = 0;
+            // Keep local trainer info and error_count
             pokemon_log_trade_event("TRADE", "Trade completed successfully");
             break;
             
@@ -937,16 +688,45 @@ void pokemon_trading_update(void) {
             pokemon_log_trade_event("ERROR", last_error);
             current_session.state = TRADE_STATE_IDLE;
             pokemon_log_trade_event("STATE", "ERROR → IDLE (error handled)");
+            // Reset relevant fields for a new attempt, keep error_count and local trainer info
+            memset(&current_session.incoming_pokemon, 0, sizeof(pokemon_data_t));
+            memset(&current_session.outgoing_pokemon, 0, sizeof(pokemon_data_t));
+            current_session.has_incoming_data = false;
+            current_session.trade_confirmed = false;
+            current_session.partner_name[0] = '\0';
+            current_session.needs_internal_reset = false;
+            current_session.our_block_sent_this_exchange = false;
+            current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+            current_session.exchange_counter = 0;
             current_session.error_count++;
             break;
     }
 }
 
 void pokemon_trading_reset(void) {
+    // Clear all storage slots
+    // memset(pokemon_storage, 0, sizeof(pokemon_storage)); // Keep stored pokemon for now
+    // stored_pokemon_count = 0;
+    
     current_session.state = TRADE_STATE_IDLE;
     pokemon_log_trade_event("STATE", "ANY → IDLE (system reset)");
+    // Preserve local_trainer_id, local_trainer_name. Reset other fields.
+    uint16_t temp_trainer_id = current_session.local_trainer_id;
+    char temp_trainer_name[POKEMON_OT_NAME_LENGTH];
+    strncpy(temp_trainer_name, current_session.local_trainer_name, POKEMON_OT_NAME_LENGTH);
+    uint8_t temp_error_count = current_session.error_count; // Preserve error count across manual resets
+
     memset(&current_session, 0, sizeof(current_session));
-    pokemon_log_trade_event("SYSTEM", "Trading session reset");
+
+    current_session.local_trainer_id = temp_trainer_id;
+    strncpy(current_session.local_trainer_name, temp_trainer_name, POKEMON_OT_NAME_LENGTH);
+    current_session.error_count = temp_error_count;
+    current_session.state = TRADE_STATE_IDLE; // Ensure state is IDLE after reset
+    current_session.our_block_sent_this_exchange = false;
+    current_session.trade_exchange_sub_state = TRADE_SUBSTATE_NONE;
+    current_session.exchange_counter = 0;
+
+    pokemon_log_trade_event("SYSTEM", "Pokemon trading system reset");
 }
 
 bool pokemon_store_received(const pokemon_data_t* pokemon, const char* source_game) {
@@ -1005,23 +785,64 @@ bool pokemon_delete_stored(size_t index) {
 }
 
 bool pokemon_send_stored(size_t index) {
-    if (index >= MAX_STORED_POKEMON || !pokemon_storage[index].occupied) {
-        pokemon_log_trade_event("ERROR", "Attempted to send invalid/empty slot");
+    // This function will now use the globally prepared g_trade_block_to_send
+    // The 'index' parameter is currently unused as we always send the Pokemon in g_trade_block_to_send.
+    // We might want to adapt this if we allow selecting from multiple prepared blocks.
+
+    if (g_trade_block_to_send.pokemon_data[0].species == 0) { // Check if a Pokemon is actually prepared
+        snprintf(last_error, sizeof(last_error), "No Pokemon prepared in g_trade_block_to_send.");
+        pokemon_log_trade_event("ERROR", last_error);
         return false;
     }
 
-    // Prepare the selected Pokemon for sending
-    memcpy(&current_session.outgoing_pokemon, &pokemon_storage[index].pokemon, sizeof(pokemon_data_t));
-    current_session.needs_internal_reset = true; // Signal that the trade state machine needs to pick this up.
-                                                 // This might need a more specific flag or state transition.
-    current_session.state = TRADE_STATE_SENDING_POKEMON; // Transition to sending state
+    // Populate current_session.outgoing_pokemon from g_trade_block_to_send for local tracking/logging
+    // This is distinct from the full trade_block_t that is sent over the wire.
+    // The outgoing_pokemon struct is a pokemon_data_t, which holds core data + C-string names.
+    
+    // Copy core data directly
+    memcpy(&current_session.outgoing_pokemon.core, &g_trade_block_to_send.pokemon_data[0], sizeof(pokemon_core_data_t));
 
-    char log_msg[128];
-    snprintf(log_msg, sizeof(log_msg), "Prepared %s (Lv.%d) from slot %zu for sending",
-            pokemon_get_species_name(pokemon_storage[index].pokemon.core.species),
-            pokemon_storage[index].pokemon.core.level, index);
-    pokemon_log_trade_event("STORAGE", log_msg);
-    pokemon_log_trade_event("STATE", "User Action -> SENDING_POKEMON");
+    // Convert and copy nickname (from trade_block_t.pokemon_nicknames[0] to pokemon_data_t.nickname)
+    convert_pokemon_name_from_block(current_session.outgoing_pokemon.nickname, g_trade_block_to_send.pokemon_nicknames[0], POKEMON_NAME_LENGTH);
+
+    // Convert and copy OT name (from trade_block_t.original_trainer_names[0] to pokemon_data_t.ot_name)
+    // Note: The trade block uses player_trainer_name for the sender's overall name,
+    // and original_trainer_names[0] for the OT of the specific Pokemon being traded.
+    // We should use original_trainer_names[0] for the Pokemon's OT name.
+    convert_pokemon_name_from_block(current_session.outgoing_pokemon.ot_name, g_trade_block_to_send.original_trainer_names[0], POKEMON_OT_NAME_LENGTH);
+    
+    // Ensure our trainer ID is set in the outgoing pokemon's core data
+    // (g_trade_block_to_send should already have this from its creation)
+    current_session.outgoing_pokemon.core.original_trainer_id = g_trade_block_to_send.pokemon_data[0].original_trainer_id;
+
+
+    char send_log[128];
+    snprintf(send_log, sizeof(send_log), "Preparing to send Pokemon: %s (Species: %d) from OT: %s",
+             current_session.outgoing_pokemon.nickname,
+             current_session.outgoing_pokemon.core.species,
+             current_session.outgoing_pokemon.ot_name);
+    pokemon_log_trade_event("TRADE_PREP", send_log);
+
+    // Send the entire trade block. The linkcable_send_trade_block handles byte swapping.
+    linkcable_send_trade_block(&g_trade_block_to_send);
+
+    current_session.our_block_sent_this_exchange = true;
+    current_session.state = TRADE_STATE_CONFIRMING; 
+    // current_session.needs_internal_reset = true; // Not needed for confirming state typically
+
+    char state_log[128];
+    snprintf(state_log, sizeof(state_log), "Sent our trade block. Transitioning to CONFIRMING. Nick: %.7s, Species: %d",
+        g_trade_block_to_send.pokemon_nicknames[0], g_trade_block_to_send.pokemon_data[0].species);
+    pokemon_log_trade_event("STATE_TRANSITION", state_log);
+    
+    // Log the species ID that we are offering for simpler debugging
+    // current_session.offered_pokemon_species = g_trade_block_to_send.pokemon_data[0].species;
+    // strncpy(current_session.offered_pokemon_name, g_trade_block_to_send.pokemon_nicknames[0], POKEMON_NAME_LENGTH -1);
+    // Ensure null termination for offered_pokemon_name as it's used in logs
+    // char temp_offered_name[POKEMON_NAME_LENGTH];
+    // convert_pokemon_name_from_block(temp_offered_name, g_trade_block_to_send.pokemon_nicknames[0], POKEMON_NAME_LENGTH);
+    // strncpy(current_session.offered_pokemon_name, temp_offered_name, sizeof(current_session.offered_pokemon_name) -1);
+    // current_session.offered_pokemon_name[sizeof(current_session.offered_pokemon_name) -1] = '\0';
 
 
     return true;

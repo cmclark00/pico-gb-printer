@@ -38,7 +38,7 @@ set(TINYUSB_LIBNETWORKING_SOURCES
     ${PICO_TINYUSB_PATH}/lib/networking/rndis_reports.c
 )
 
-add_executable(${PROJECT_NAME} src/pico_pokemon_storage.c src/linkcable.c src/pokemon_data.c src/pokemon_trading.c src/datablocks.c src/tusb_lwip_glue.c src/usb_descriptors.c src/websocket_server.c ${TINYUSB_LIBNETWORKING_SOURCES})
+add_executable(${PROJECT_NAME} src/pico_pokemon_storage.c src/linkcable.c src/pokemon_data.c src/pokemon_trading.c src/datablocks.c src/tusb_lwip_glue.c src/usb_descriptors.c src/websocket_server.c src/char_encode.c ${TINYUSB_LIBNETWORKING_SOURCES})
 
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/src/linkcable.pio)
 
